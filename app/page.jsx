@@ -1,13 +1,18 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { CalendarDays, ClipboardList, List, Plus, Repeat2, Save, Search, Settings, Shield, Trash2, User, UserPlus, Users } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { createClient } from "@supabase/supabase-js";
 
 const STORAGE_KEY = "hscomet-ta-schedule-v2";
 const ADMIN_PASSWORD = "hscomet101";
+const SUPABASE_STATE_ID = "main";
+const supabaseUrl = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_SUPABASE_URL || "" : "";
+const supabaseAnonKey = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "" : "";
+const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 const NO_PERSON = "인원 없음";
 
 const days = ["일", "월", "화", "수", "목", "금", "토"];
@@ -162,36 +167,115 @@ export default function Page() {
   const [viewMode, setViewMode] = useState("calendar");
   const [rightTab, setRightTab] = useState("extra");
   const [newAssistant, setNewAssistant] = useState("");
-  const [saveStatus, setSaveStatus] = useState("브라우저 저장 모드");
+  const [saveStatus, setSaveStatus] = useState(supabase ? "DB 연결 준비 중" : "브라우저 저장 모드");
+  const [storageReady, setStorageReady] = useState(false);
+  const remoteUpdateRef = useRef(false);
   const [swapApprovals, setSwapApprovals] = useState({});
   const [extra, setExtra] = useState({ date: dateKey(today), title: "추가 수업", start: "10:00", end: "13:00", assistants: [NO_PERSON, NO_PERSON] });
   const [vacationForm, setVacationForm] = useState({ startDate: dateKey(today), endDate: dateKey(today), weekday: "1", title: "방학 정규 수업", start: "10:00", end: "13:00", assistants: [NO_PERSON, NO_PERSON] });
 
+  const applySavedState = (data) => {
+    if (!data) return;
+    if (data.year) setYear(data.year);
+    if (data.month) setMonth(data.month);
+    if (data.assistants) setAssistants(data.assistants);
+    if (data.currentAssistant) setCurrentAssistant(data.currentAssistant);
+    if (data.selectedAssistant) setSelectedAssistant(data.selectedAssistant);
+    if (data.baseSchedule) setBaseSchedule(data.baseSchedule);
+    if (data.vacationSchedules) setVacationSchedules(data.vacationSchedules);
+    if (data.lessons) setLessons(data.lessons);
+    if (data.viewMode) setViewMode(data.viewMode);
+  };
+
   useEffect(() => {
-    const saved = window.localStorage.getItem(STORAGE_KEY);
-    if (!saved) return;
-    try {
-      const data = JSON.parse(saved);
-      if (data.year) setYear(data.year);
-      if (data.month) setMonth(data.month);
-      if (data.assistants) setAssistants(data.assistants);
-      if (data.currentAssistant) setCurrentAssistant(data.currentAssistant);
-      if (data.selectedAssistant) setSelectedAssistant(data.selectedAssistant);
-      if (data.baseSchedule) setBaseSchedule(data.baseSchedule);
-      if (data.vacationSchedules) setVacationSchedules(data.vacationSchedules);
-      if (data.lessons) setLessons(data.lessons);
-      if (data.viewMode) setViewMode(data.viewMode);
-      setSaveStatus("저장된 일정 불러옴");
-    } catch {
-      setSaveStatus("저장 데이터 불러오기 실패");
-    }
+    const loadSavedState = async () => {
+      try {
+        if (supabase) {
+          const { data, error } = await supabase
+            .from("app_state")
+            .select("data")
+            .eq("id", SUPABASE_STATE_ID)
+            .maybeSingle();
+
+          if (error) throw error;
+          if (data?.data) {
+            applySavedState(data.data);
+            setSaveStatus("DB에서 일정 불러옴");
+            return;
+          }
+        }
+
+        const saved = window.localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          applySavedState(JSON.parse(saved));
+          setSaveStatus(supabase ? "DB 데이터 없음 · 이 브라우저 저장값 불러옴" : "이 브라우저 저장값 불러옴");
+        } else {
+          setSaveStatus(supabase ? "DB 저장 준비 완료" : "브라우저 저장 모드");
+        }
+      } catch (error) {
+        console.error("일정 불러오기 실패", error);
+        setSaveStatus("일정 불러오기 실패");
+      } finally {
+        setStorageReady(true);
+      }
+    };
+
+    loadSavedState();
   }, []);
 
   useEffect(() => {
+    if (!supabase) return;
+
+    const channel = supabase
+      .channel("app_state_changes")
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "app_state", filter: `id=eq.${SUPABASE_STATE_ID}` },
+        (payload) => {
+          if (!payload.new?.data) return;
+          remoteUpdateRef.current = true;
+          applySavedState(payload.new.data);
+          setSaveStatus("DB 변경사항 반영됨");
+          window.setTimeout(() => {
+            remoteUpdateRef.current = false;
+          }, 0);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    if (remoteUpdateRef.current) return;
+
     const data = { year, month, assistants, currentAssistant, selectedAssistant, baseSchedule, vacationSchedules, lessons, viewMode };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    setSaveStatus("이 브라우저에 저장됨");
-  }, [year, month, assistants, currentAssistant, selectedAssistant, baseSchedule, vacationSchedules, lessons, viewMode]);
+
+    if (!supabase) {
+      setSaveStatus("이 브라우저에 저장됨");
+      return;
+    }
+
+    setSaveStatus("DB 저장 중...");
+    const timer = window.setTimeout(async () => {
+      const { error } = await supabase
+        .from("app_state")
+        .upsert({ id: SUPABASE_STATE_ID, data, updated_at: new Date().toISOString() });
+
+      if (error) {
+        console.error("DB 저장 실패", error);
+        setSaveStatus("DB 저장 실패");
+      } else {
+        setSaveStatus("DB에 저장됨");
+      }
+    }, 400);
+
+    return () => window.clearTimeout(timer);
+  }, [storageReady, year, month, assistants, currentAssistant, selectedAssistant, baseSchedule, vacationSchedules, lessons, viewMode]);
 
   const isAdmin = role === "admin" && adminUnlocked;
   const isAllView = role === "all";
