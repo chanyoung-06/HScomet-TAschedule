@@ -326,23 +326,25 @@ export default function Page() {
 
   const stats = useMemo(() => {
     const result = {};
-    lessons.forEach((lesson) => {
+    const monthPrefix = `${year}-${pad(month)}-`;
+    lessons.filter((lesson) => lesson.date.startsWith(monthPrefix)).forEach((lesson) => {
       result[lesson.title] ||= {};
       lesson.assistants.filter((name) => name && name !== NO_PERSON).forEach((name) => {
         result[lesson.title][name] = (result[lesson.title][name] || 0) + 1;
       });
     });
     return result;
-  }, [lessons]);
+  }, [lessons, year, month]);
 
   const assistantClassStats = useMemo(() => {
     const result = {};
-    lessons.forEach((lesson) => {
+    const monthPrefix = `${year}-${pad(month)}-`;
+    lessons.filter((lesson) => lesson.date.startsWith(monthPrefix)).forEach((lesson) => {
       if (!lesson.assistants.includes(currentAssistant)) return;
       result[lesson.title] = (result[lesson.title] || 0) + 1;
     });
     return result;
-  }, [lessons, currentAssistant]);
+  }, [lessons, currentAssistant, year, month]);
 
   const loadMonth = () => {
     pushUndo("기본 일정 생성");
