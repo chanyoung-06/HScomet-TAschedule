@@ -175,6 +175,7 @@ export default function Page() {
   const [swapApprovals, setSwapApprovals] = useState({});
   const [extra, setExtra] = useState({ date: dateKey(today), title: "추가 수업", start: "10:00", end: "13:00", assistants: [NO_PERSON, NO_PERSON] });
   const [vacationForm, setVacationForm] = useState({ startDate: dateKey(today), endDate: dateKey(today), weekday: "1", title: "방학 정규 수업", start: "10:00", end: "13:00", assistants: [NO_PERSON, NO_PERSON] });
+  const [undoStack, setUndoStack] = useState([]);
 
   const applySavedState = (data) => {
     if (!data) return;
@@ -187,6 +188,31 @@ export default function Page() {
     if (data.vacationSchedules) setVacationSchedules(data.vacationSchedules);
     if (data.lessons) setLessons(data.lessons);
     if (data.viewMode) setViewMode(data.viewMode);
+  };
+
+  const makeSnapshot = () => ({
+    year,
+    month,
+    assistants,
+    currentAssistant,
+    selectedAssistant,
+    baseSchedule,
+    vacationSchedules,
+    lessons,
+    viewMode,
+  });
+
+  const pushUndo = (label) => {
+    setUndoStack((prev) => [...prev.slice(-19), { label, state: makeSnapshot() }]);
+  };
+
+  const undoLast = () => {
+    const last = undoStack[undoStack.length - 1];
+    if (!last) return;
+    remoteUpdateRef.current = false;
+    applySavedState(last.state);
+    setUndoStack((prev) => prev.slice(0, -1));
+    setSaveStatus(`되돌림: ${last.label}`);
   };
 
   useEffect(() => {
@@ -270,8 +296,7 @@ export default function Page() {
 
       if (error) {
         console.error("DB 저장 실패", error);
-        setSaveStatus(`DB 저장 실패: ${error.message}`);
-        alert(error.message);
+        setSaveStatus("DB 저장 실패");
       } else {
         setSaveStatus("DB에 저장됨");
       }
@@ -320,18 +345,29 @@ export default function Page() {
   }, [lessons, currentAssistant]);
 
   const loadMonth = () => {
-    setLessons(generateMonthLessons(year, month, baseSchedule, vacationSchedules));
+    pushUndo("기본 일정 생성");
+    const monthPrefix = `${year}-${pad(month)}-`;
+    const newMonthLessons = generateMonthLessons(year, month, baseSchedule, vacationSchedules);
+
+    setLessons((prev) => {
+      const otherMonths = prev.filter((lesson) => !lesson.date.startsWith(monthPrefix));
+      const currentMonthExtras = prev.filter((lesson) => lesson.date.startsWith(monthPrefix) && lesson.type === "extra");
+      return [...otherMonths, ...newMonthLessons, ...currentMonthExtras].sort((a, b) => `${a.date} ${a.start}`.localeCompare(`${b.date} ${b.start}`));
+    });
+
     setSelectedAssistant("전체");
   };
 
   const addAssistant = () => {
     const name = newAssistant.trim();
+    pushUndo("조교 추가");
     if (!name || name === NO_PERSON || assistants.includes(name)) return;
     setAssistants([...assistants.filter((x) => x !== NO_PERSON), name, NO_PERSON]);
     setNewAssistant("");
   };
 
   const updateLessonAssistant = (id, index, value) => {
+    pushUndo("수업 조교 변경");
     setLessons((prev) => prev.map((lesson) => {
       if (lesson.id !== id) return lesson;
       const next = [...lesson.assistants];
@@ -341,10 +377,12 @@ export default function Page() {
   };
 
   const addLessonAssistantSlot = (id) => {
+    pushUndo("조교 칸 추가");
     setLessons((prev) => prev.map((lesson) => lesson.id === id ? { ...lesson, assistants: [...lesson.assistants, NO_PERSON] } : lesson));
   };
 
   const removeLessonAssistantSlot = (id, index) => {
+    pushUndo("조교 칸 삭제");
     setLessons((prev) => prev.map((lesson) => {
       if (lesson.id !== id) return lesson;
       const next = lesson.assistants.filter((_, i) => i !== index);
@@ -353,15 +391,18 @@ export default function Page() {
   };
 
   const addExtraLesson = () => {
+    pushUndo("추가 수업 등록");
     setLessons((prev) => [...prev, makeLesson({ ...extra, assistants: cleanAssistants(extra.assistants), type: "extra" })]);
     setExtra({ ...extra, title: "추가 수업", assistants: [NO_PERSON, NO_PERSON] });
   };
 
   const addVacationSchedule = () => {
+    pushUndo("방학 정규 등록");
     setVacationSchedules((prev) => [...prev, { ...vacationForm, id: `vacation-${Date.now()}`, assistants: cleanAssistants(vacationForm.assistants) }]);
   };
 
   const updateBaseLesson = (dayKey, id, field, value) => {
+    pushUndo("기본 일정 수정");
     setBaseSchedule((prev) => ({
       ...prev,
       [dayKey]: prev[dayKey].map((lesson) => lesson.id === id ? { ...lesson, [field]: value } : lesson),
@@ -369,6 +410,7 @@ export default function Page() {
   };
 
   const updateBaseAssistant = (dayKey, id, index, value) => {
+    pushUndo("기본 조교 변경");
     setBaseSchedule((prev) => ({
       ...prev,
       [dayKey]: prev[dayKey].map((lesson) => {
@@ -381,6 +423,7 @@ export default function Page() {
   };
 
   const addBaseLesson = (dayKey) => {
+    pushUndo("기본 수업 추가");
     setBaseSchedule((prev) => ({
       ...prev,
       [dayKey]: [...prev[dayKey], { id: `${dayKey}-${Date.now()}`, title: "새 정규 수업", start: "10:00", end: "13:00", assistants: [NO_PERSON, NO_PERSON] }],
@@ -388,10 +431,12 @@ export default function Page() {
   };
 
   const deleteBaseLesson = (dayKey, id) => {
+    pushUndo("기본 수업 삭제");
     setBaseSchedule((prev) => ({ ...prev, [dayKey]: prev[dayKey].filter((lesson) => lesson.id !== id) }));
   };
 
   const requestSwap = (id) => {
+    pushUndo("대타 요청");
     setLessons((prev) => prev.map((lesson) => {
       if (lesson.id !== id || lesson.swapRequests.includes(currentAssistant)) return lesson;
       return { ...lesson, swap: true, swapRequests: [...lesson.swapRequests, currentAssistant] };
@@ -399,10 +444,12 @@ export default function Page() {
   };
 
   const cancelSwapRequest = (id) => {
+    pushUndo("대타 요청 취소");
     setLessons((prev) => prev.map((lesson) => lesson.id === id ? { ...lesson, swapRequests: lesson.swapRequests.filter((name) => name !== currentAssistant) } : lesson));
   };
 
   const approveSwap = (id, requester) => {
+    pushUndo("대타 승인");
     const replacement = swapApprovals[`${id}-${requester}`] || NO_PERSON;
     setLessons((prev) => prev.map((lesson) => {
       if (lesson.id !== id) return lesson;
@@ -417,7 +464,15 @@ export default function Page() {
     }));
   };
 
-  const deleteLesson = (id) => setLessons((prev) => prev.filter((lesson) => lesson.id !== id));
+  const deleteLesson = (id) => {
+    pushUndo("수업 삭제");
+    setLessons((prev) => prev.filter((lesson) => lesson.id !== id));
+  };
+
+  const deleteVacationSchedule = (id) => {
+    pushUndo("방학 정규 삭제");
+    setVacationSchedules((prev) => prev.filter((schedule) => schedule.id !== id));
+  };
 
   const LessonCard = ({ lesson, compact = false }) => {
     const isSat = new Date(`${lesson.date}T00:00:00`).getDay() === 6;
@@ -544,7 +599,7 @@ export default function Page() {
 
           {rightTab === "base" && <div className="space-y-4"><div><h2 className="flex items-center gap-2 text-xl font-semibold"><Settings size={20} /> 기본 일정 설정</h2><p className="mt-1 text-sm text-slate-500">수정 후 ‘기본 일정으로 생성’을 누르면 선택한 달에 반영됩니다.</p></div><BaseScheduleEditor dayKey="saturday" label="토요일 기본" tone="bg-rose-50" /><BaseScheduleEditor dayKey="sunday" label="일요일 기본" tone="bg-blue-50" /></div>}
 
-          {rightTab === "vacation" && <div className="space-y-4"><div><h2 className="flex items-center gap-2 text-xl font-semibold"><CalendarDays size={20} /> 방학 정규 수업</h2><p className="mt-1 text-sm text-slate-500">개강일~종강일 사이의 지정 요일마다 반복 추가됩니다.</p></div><div className="grid grid-cols-2 gap-2"><label className="space-y-1 text-sm">개강 날짜<input className="w-full rounded-xl border p-2" type="date" value={vacationForm.startDate} onChange={(e) => setVacationForm({ ...vacationForm, startDate: e.target.value })} /></label><label className="space-y-1 text-sm">종강 날짜<input className="w-full rounded-xl border p-2" type="date" value={vacationForm.endDate} onChange={(e) => setVacationForm({ ...vacationForm, endDate: e.target.value })} /></label></div><label className="block space-y-1 text-sm">요일<select className="w-full rounded-xl border p-2" value={vacationForm.weekday} onChange={(e) => setVacationForm({ ...vacationForm, weekday: e.target.value })}>{days.map((day, index) => <option key={day} value={index}>{day}요일</option>)}</select></label><TextInput className="w-full rounded-xl border p-2" value={vacationForm.title} onCommit={(value) => setVacationForm({ ...vacationForm, title: value })} placeholder="수업명 예: 34기 방학특강" /><div className="grid grid-cols-2 gap-2"><input className="rounded-xl border p-2" type="time" value={vacationForm.start} onChange={(e) => setVacationForm({ ...vacationForm, start: e.target.value })} /><input className="rounded-xl border p-2" type="time" value={vacationForm.end} onChange={(e) => setVacationForm({ ...vacationForm, end: e.target.value })} /></div><div className="space-y-2">{vacationForm.assistants.map((name, index) => <AssistantSlot key={index} value={name} assistants={assistants} onChange={(value) => { const next = [...vacationForm.assistants]; next[index] = value; setVacationForm({ ...vacationForm, assistants: next }); }} onRemove={() => { const next = vacationForm.assistants.filter((_, i) => i !== index); setVacationForm({ ...vacationForm, assistants: next.length ? next : [NO_PERSON] }); }} />)}<button onClick={() => setVacationForm({ ...vacationForm, assistants: [...vacationForm.assistants, NO_PERSON] })} className="rounded-lg bg-slate-100 px-3 py-2 text-sm">+ 조교 칸 추가</button></div><Button onClick={addVacationSchedule} className="w-full rounded-xl">방학 정규 등록</Button><div className="space-y-2">{vacationSchedules.map((schedule) => <div key={schedule.id} className="rounded-2xl bg-emerald-50 p-3 text-sm"><div className="font-bold">{schedule.title}</div><div>{schedule.startDate}~{schedule.endDate} · {days[Number(schedule.weekday)]}요일 · {schedule.start}~{schedule.end}</div><div className="text-slate-600">{schedule.assistants.join(" · ")}</div><button onClick={() => setVacationSchedules(vacationSchedules.filter((x) => x.id !== schedule.id))} className="mt-2 rounded-lg bg-red-50 px-2 py-1 text-xs text-red-600">삭제</button></div>)}</div></div>}
+          {rightTab === "vacation" && <div className="space-y-4"><div><h2 className="flex items-center gap-2 text-xl font-semibold"><CalendarDays size={20} /> 방학 정규 수업</h2><p className="mt-1 text-sm text-slate-500">개강일~종강일 사이의 지정 요일마다 반복 추가됩니다.</p></div><div className="grid grid-cols-2 gap-2"><label className="space-y-1 text-sm">개강 날짜<input className="w-full rounded-xl border p-2" type="date" value={vacationForm.startDate} onChange={(e) => setVacationForm({ ...vacationForm, startDate: e.target.value })} /></label><label className="space-y-1 text-sm">종강 날짜<input className="w-full rounded-xl border p-2" type="date" value={vacationForm.endDate} onChange={(e) => setVacationForm({ ...vacationForm, endDate: e.target.value })} /></label></div><label className="block space-y-1 text-sm">요일<select className="w-full rounded-xl border p-2" value={vacationForm.weekday} onChange={(e) => setVacationForm({ ...vacationForm, weekday: e.target.value })}>{days.map((day, index) => <option key={day} value={index}>{day}요일</option>)}</select></label><TextInput className="w-full rounded-xl border p-2" value={vacationForm.title} onCommit={(value) => setVacationForm({ ...vacationForm, title: value })} placeholder="수업명 예: 34기 방학특강" /><div className="grid grid-cols-2 gap-2"><input className="rounded-xl border p-2" type="time" value={vacationForm.start} onChange={(e) => setVacationForm({ ...vacationForm, start: e.target.value })} /><input className="rounded-xl border p-2" type="time" value={vacationForm.end} onChange={(e) => setVacationForm({ ...vacationForm, end: e.target.value })} /></div><div className="space-y-2">{vacationForm.assistants.map((name, index) => <AssistantSlot key={index} value={name} assistants={assistants} onChange={(value) => { const next = [...vacationForm.assistants]; next[index] = value; setVacationForm({ ...vacationForm, assistants: next }); }} onRemove={() => { const next = vacationForm.assistants.filter((_, i) => i !== index); setVacationForm({ ...vacationForm, assistants: next.length ? next : [NO_PERSON] }); }} />)}<button onClick={() => setVacationForm({ ...vacationForm, assistants: [...vacationForm.assistants, NO_PERSON] })} className="rounded-lg bg-slate-100 px-3 py-2 text-sm">+ 조교 칸 추가</button></div><Button onClick={addVacationSchedule} className="w-full rounded-xl">방학 정규 등록</Button><div className="space-y-2">{vacationSchedules.map((schedule) => <div key={schedule.id} className="rounded-2xl bg-emerald-50 p-3 text-sm"><div className="font-bold">{schedule.title}</div><div>{schedule.startDate}~{schedule.endDate} · {days[Number(schedule.weekday)]}요일 · {schedule.start}~{schedule.end}</div><div className="text-slate-600">{schedule.assistants.join(" · ")}</div><button onClick={() => deleteVacationSchedule(schedule.id)} className="mt-2 rounded-lg bg-red-50 px-2 py-1 text-xs text-red-600">삭제</button></div>)}</div></div>}
         </CardContent>
       </Card>
 
@@ -564,7 +619,7 @@ export default function Page() {
         <motion.header initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="rounded-3xl bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div><p className="mb-2 inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-600"><CalendarDays size={16} /> 혜성 코멧 학원</p><h1 className="text-3xl font-bold tracking-tight md:text-4xl">조교 출근 일정 관리</h1><p className="mt-2 text-sm text-slate-500">{saveStatus}</p></div>
-            <div className="flex flex-wrap gap-2"><div className="rounded-xl bg-slate-100 p-1"><button onClick={() => setRole("all")} className={`rounded-lg px-3 py-2 text-sm ${role === "all" ? "bg-white shadow-sm" : ""}`}><Users size={15} className="mr-1 inline" />전체 일정</button><button onClick={() => setRole("assistant")} className={`rounded-lg px-3 py-2 text-sm ${role === "assistant" ? "bg-white shadow-sm" : ""}`}><User size={15} className="mr-1 inline" />조교</button><button onClick={() => setRole("admin")} className={`rounded-lg px-3 py-2 text-sm ${role === "admin" ? "bg-white shadow-sm" : ""}`}><Shield size={15} className="mr-1 inline" />관리자</button></div>{role === "admin" && !adminUnlocked && <div className="flex gap-2"><input type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} placeholder="관리자 비밀번호" className="rounded-xl border px-3 py-2" /><Button onClick={() => adminPassword === ADMIN_PASSWORD ? setAdminUnlocked(true) : alert("비밀번호가 올바르지 않습니다.")} className="rounded-xl">입장</Button></div>}<input className="w-24 rounded-xl border px-3 py-2" type="number" value={year} onChange={(e) => setYear(Number(e.target.value))} /><select className="rounded-xl border px-3 py-2" value={month} onChange={(e) => setMonth(Number(e.target.value))}>{Array.from({ length: 12 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}월</option>)}</select>{isAdmin && <Button onClick={loadMonth} className="rounded-xl"><Save size={16} className="mr-1" />기본 일정으로 생성</Button>}</div>
+            <div className="flex flex-wrap gap-2"><div className="rounded-xl bg-slate-100 p-1"><button onClick={() => setRole("all")} className={`rounded-lg px-3 py-2 text-sm ${role === "all" ? "bg-white shadow-sm" : ""}`}><Users size={15} className="mr-1 inline" />전체 일정</button><button onClick={() => setRole("assistant")} className={`rounded-lg px-3 py-2 text-sm ${role === "assistant" ? "bg-white shadow-sm" : ""}`}><User size={15} className="mr-1 inline" />조교</button><button onClick={() => setRole("admin")} className={`rounded-lg px-3 py-2 text-sm ${role === "admin" ? "bg-white shadow-sm" : ""}`}><Shield size={15} className="mr-1 inline" />관리자</button></div>{role === "admin" && !adminUnlocked && <div className="flex gap-2"><input type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} placeholder="관리자 비밀번호" className="rounded-xl border px-3 py-2" /><Button onClick={() => adminPassword === ADMIN_PASSWORD ? setAdminUnlocked(true) : alert("비밀번호가 올바르지 않습니다.")} className="rounded-xl">입장</Button></div>}<input className="w-24 rounded-xl border px-3 py-2" type="number" value={year} onChange={(e) => setYear(Number(e.target.value))} /><Button onClick={undoLast} disabled={undoStack.length === 0} variant="secondary" className="rounded-xl"><Repeat2 size={16} className="mr-1" />되돌리기{undoStack.length > 0 ? ` (${undoStack.length})` : ""}</Button><select className="rounded-xl border px-3 py-2" value={month} onChange={(e) => setMonth(Number(e.target.value))}>{Array.from({ length: 12 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}월</option>)}</select>{isAdmin && <Button onClick={loadMonth} className="rounded-xl"><Save size={16} className="mr-1" />기본 일정으로 생성</Button>}</div>
           </div>
         </motion.header>
 
