@@ -10,8 +10,10 @@ import { createClient } from "@supabase/supabase-js";
 const STORAGE_KEY = "hscomet-ta-schedule-v2";
 const ADMIN_PASSWORD = "hscomet101";
 const SUPABASE_STATE_ID = "main";
-const supabaseUrl = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_SUPABASE_URL || "" : "";
-const supabaseAnonKey = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "" : "";
+const SUPABASE_URL_FALLBACK = "https://msdikmalqkhmkwqzbpkm.supabase.co";
+const SUPABASE_ANON_KEY_FALLBACK = "sb_publishable_TmBNhYVTTgcsaeGavMkgeQ_QbIAmlTM";
+const supabaseUrl = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_SUPABASE_URL || SUPABASE_URL_FALLBACK : SUPABASE_URL_FALLBACK;
+const supabaseAnonKey = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || SUPABASE_ANON_KEY_FALLBACK : SUPABASE_ANON_KEY_FALLBACK;
 const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 const NO_PERSON = "인원 없음";
 
