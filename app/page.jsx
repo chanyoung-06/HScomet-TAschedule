@@ -270,7 +270,8 @@ export default function Page() {
 
       if (error) {
         console.error("DB 저장 실패", error);
-        setSaveStatus("DB 저장 실패");
+        setSaveStatus(`DB 저장 실패: ${error.message}`);
+        alert(error.message);
       } else {
         setSaveStatus("DB에 저장됨");
       }
