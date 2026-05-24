@@ -310,10 +310,12 @@ export default function Page() {
   const monthDates = useMemo(() => getMonthDates(year, month), [year, month]);
 
   const visibleLessons = useMemo(() => {
+    const monthPrefix = `${year}-${pad(month)}-`;
     const target = isAdmin || isAllView ? selectedAssistant : currentAssistant;
-    const filtered = target === "전체" ? lessons : lessons.filter((lesson) => lesson.assistants.includes(target));
+    const monthlyLessons = lessons.filter((lesson) => lesson.date.startsWith(monthPrefix));
+    const filtered = target === "전체" ? monthlyLessons : monthlyLessons.filter((lesson) => lesson.assistants.includes(target));
     return [...filtered].sort((a, b) => `${a.date} ${a.start}`.localeCompare(`${b.date} ${b.start}`));
-  }, [lessons, selectedAssistant, currentAssistant, isAdmin, isAllView]);
+  }, [lessons, selectedAssistant, currentAssistant, isAdmin, isAllView, year, month]);
 
   const lessonsByDate = useMemo(() => {
     const map = {};
