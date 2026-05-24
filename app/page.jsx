@@ -230,7 +230,7 @@ export default function Page() {
       .channel("app_state_changes")
       .on(
         "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "app_state", filter: `id=eq.${SUPABASE_STATE_ID}` },
+        { event: "*", schema: "public", table: "app_state", filter: `id=eq.${SUPABASE_STATE_ID}` },
         (payload) => {
           if (!payload.new?.data) return;
           remoteUpdateRef.current = true;
