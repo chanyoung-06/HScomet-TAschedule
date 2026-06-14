@@ -57,6 +57,15 @@ const defaultBaseSchedule = {
 
 const assistantSeed = ["강지후", "송은호", "정율제", "이찬영", NO_PERSON];
 
+const assistantPasswordSeed = {
+  강지후: "0000",
+  송은호: "0000",
+  정율제: "0000",
+  이찬영: "0000",
+};
+
+const DEFAULT_ASSISTANT_PASSWORD = "0000";
+
 function pad(n) {
   return String(n).padStart(2, "0");
 }
@@ -217,6 +226,11 @@ export default function Page() {
   const [deviceMode, setDeviceMode] = useState("web");
   const [rightTab, setRightTab] = useState("extra");
   const [newAssistant, setNewAssistant] = useState("");
+  const [newAssistantPassword, setNewAssistantPassword] = useState("");
+  const [assistantPasswords, setAssistantPasswords] = useState(assistantPasswordSeed);
+  const [assistantUnlocked, setAssistantUnlocked] = useState(false);
+  const [assistantLoginName, setAssistantLoginName] = useState("강지후");
+  const [assistantLoginPassword, setAssistantLoginPassword] = useState("");
   const [saveStatus, setSaveStatus] = useState(supabase ? "DB 연결 준비 중" : "브라우저 저장 모드");
   const [storageReady, setStorageReady] = useState(false);
   const [swapApprovals, setSwapApprovals] = useState({});
@@ -250,6 +264,7 @@ export default function Page() {
     if (data.year) setYear(data.year);
     if (data.month) setMonth(data.month);
     if (data.assistants) setAssistants(data.assistants);
+    if (data.assistantPasswords) setAssistantPasswords(data.assistantPasswords);
     if (data.currentAssistant) setCurrentAssistant(data.currentAssistant);
     if (data.selectedAssistant) setSelectedAssistant(data.selectedAssistant);
     if (data.baseSchedule) setBaseSchedule(data.baseSchedule);
@@ -263,6 +278,7 @@ export default function Page() {
     year,
     month,
     assistants,
+    assistantPasswords,
     currentAssistant,
     selectedAssistant,
     baseSchedule,
@@ -349,6 +365,7 @@ export default function Page() {
       year,
       month,
       assistants,
+      assistantPasswords,
       currentAssistant,
       selectedAssistant,
       baseSchedule,
@@ -385,6 +402,7 @@ export default function Page() {
     year,
     month,
     assistants,
+    assistantPasswords,
     currentAssistant,
     selectedAssistant,
     baseSchedule,
@@ -459,12 +477,71 @@ export default function Page() {
     setSelectedAssistant("전체");
   };
 
+  // 자동저장 외에, 버튼으로 즉시 저장
+  const saveNow = async () => {
+    const data = {
+      year,
+      month,
+      assistants,
+      assistantPasswords,
+      currentAssistant,
+      selectedAssistant,
+      baseSchedule,
+      vacationSchedules,
+      lessons,
+      viewMode,
+      deviceMode,
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    if (!supabase) {
+      setSaveStatus("이 브라우저에 저장됨 (수동 저장)");
+      return;
+    }
+    setSaveStatus("저장 중...");
+    const { error } = await supabase
+      .from("app_state")
+      .upsert({ id: SUPABASE_STATE_ID, data, updated_at: new Date().toISOString() });
+    if (error) {
+      console.error("수동 저장 실패", error);
+      setSaveStatus(`저장 실패: ${error.message}`);
+    } else {
+      setSaveStatus("기본 일정 저장 완료 ✓");
+    }
+  };
+
   const addAssistant = () => {
     const name = newAssistant.trim();
     if (!name || name === NO_PERSON || assistants.includes(name)) return;
     pushUndo("조교 추가");
     setAssistants([...assistants.filter((x) => x !== NO_PERSON), name, NO_PERSON]);
+    setAssistantPasswords((prev) => ({ ...prev, [name]: newAssistantPassword.trim() || DEFAULT_ASSISTANT_PASSWORD }));
     setNewAssistant("");
+    setNewAssistantPassword("");
+  };
+
+  const setAssistantPassword = (name, pw) => {
+    pushUndo("조교 비밀번호 변경");
+    setAssistantPasswords((prev) => ({ ...prev, [name]: pw }));
+  };
+
+  const assistantLogin = () => {
+    const expected = assistantPasswords[assistantLoginName];
+    if (expected === undefined) {
+      window.alert("비밀번호가 설정되지 않은 조교입니다. 관리자에게 문의하세요.");
+      return;
+    }
+    if (assistantLoginPassword === expected) {
+      setCurrentAssistant(assistantLoginName);
+      setAssistantUnlocked(true);
+      setAssistantLoginPassword("");
+    } else {
+      window.alert("비밀번호가 올바르지 않습니다.");
+    }
+  };
+
+  const assistantLogout = () => {
+    setAssistantUnlocked(false);
+    setAssistantLoginPassword("");
   };
 
   const updateLessonAssistant = (id, index, value) => {
@@ -474,7 +551,9 @@ export default function Page() {
         if (lesson.id !== id) return lesson;
         const next = [...lesson.assistants];
         next[index] = value || NO_PERSON;
-        return { ...lesson, assistants: next };
+        // 더 이상 배정에 없는 대타 표시는 자동으로 정리
+        const cleanedSubs = (lesson.substituteAssistants || []).filter((n) => next.includes(n));
+        return { ...lesson, assistants: next, substituteAssistants: cleanedSubs };
       })
     );
   };
@@ -490,7 +569,43 @@ export default function Page() {
       prev.map((lesson) => {
         if (lesson.id !== id) return lesson;
         const next = lesson.assistants.filter((_, i) => i !== index);
-        return { ...lesson, assistants: next.length ? next : [NO_PERSON] };
+        const finalNext = next.length ? next : [NO_PERSON];
+        const cleanedSubs = (lesson.substituteAssistants || []).filter((n) => finalNext.includes(n));
+        return { ...lesson, assistants: finalNext, substituteAssistants: cleanedSubs };
+      })
+    );
+  };
+
+  // 대타 승인 후 관리자가 자유롭게 수정/초기화할 수 있도록 추가된 기능
+  const clearLessonSwap = (id) => {
+    pushUndo("대타 기록 초기화");
+    setLessons((prev) =>
+      prev.map((lesson) =>
+        lesson.id === id
+          ? { ...lesson, swap: false, swapRequests: [], swapHistory: [], substituteAssistants: [] }
+          : lesson
+      )
+    );
+  };
+
+  const removeSwapHistoryEntry = (id, idx) => {
+    pushUndo("대타 기록 삭제");
+    setLessons((prev) =>
+      prev.map((lesson) => {
+        if (lesson.id !== id) return lesson;
+        const history = lesson.swapHistory || [];
+        const removed = history[idx];
+        const nextHistory = history.filter((_, i) => i !== idx);
+        const stillUsed = nextHistory.some((h) => h.to === removed?.to);
+        const nextSubs = stillUsed
+          ? lesson.substituteAssistants || []
+          : (lesson.substituteAssistants || []).filter((n) => n !== removed?.to);
+        return {
+          ...lesson,
+          swapHistory: nextHistory,
+          substituteAssistants: nextSubs,
+          swap: nextHistory.length > 0 || (lesson.swapRequests || []).length > 0,
+        };
       })
     );
   };
@@ -530,6 +645,28 @@ export default function Page() {
     }));
   };
 
+  const addBaseAssistantSlot = (dayKey, id) => {
+    pushUndo("기본 조교 칸 추가");
+    setBaseSchedule((prev) => ({
+      ...prev,
+      [dayKey]: prev[dayKey].map((lesson) =>
+        lesson.id === id ? { ...lesson, assistants: [...lesson.assistants, NO_PERSON] } : lesson
+      ),
+    }));
+  };
+
+  const removeBaseAssistantSlot = (dayKey, id, index) => {
+    pushUndo("기본 조교 칸 삭제");
+    setBaseSchedule((prev) => ({
+      ...prev,
+      [dayKey]: prev[dayKey].map((lesson) => {
+        if (lesson.id !== id) return lesson;
+        const next = lesson.assistants.filter((_, i) => i !== index);
+        return { ...lesson, assistants: next.length ? next : [NO_PERSON] };
+      }),
+    }));
+  };
+
   const addBaseLesson = (dayKey) => {
     pushUndo("기본 수업 추가");
     setBaseSchedule((prev) => ({
@@ -544,6 +681,46 @@ export default function Page() {
   const deleteBaseLesson = (dayKey, id) => {
     pushUndo("기본 수업 삭제");
     setBaseSchedule((prev) => ({ ...prev, [dayKey]: prev[dayKey].filter((lesson) => lesson.id !== id) }));
+  };
+
+  // 현재 달의 토·일 정규 수업 배정을 기본 일정으로 저장 (각 요일 첫 주 기준)
+  const saveCurrentMonthAsBase = () => {
+    const monthPrefix = `${year}-${pad(month)}-`;
+    const monthly = lessons.filter((l) => l.date.startsWith(monthPrefix) && l.type === "regular");
+
+    const pick = (targetDay) => {
+      const byDate = {};
+      monthly.forEach((l) => {
+        const d = new Date(`${l.date}T00:00:00`).getDay();
+        if (d !== targetDay) return;
+        (byDate[l.date] ||= []).push(l);
+      });
+      const dates = Object.keys(byDate).sort();
+      if (!dates.length) return null;
+      return byDate[dates[0]]
+        .sort((a, b) => a.start.localeCompare(b.start))
+        .map((l, i) => ({
+          id: `${targetDay === 6 ? "sat" : "sun"}-${i + 1}`,
+          title: l.title,
+          start: l.start,
+          end: l.end,
+          assistants: cleanAssistants(l.assistants),
+        }));
+    };
+
+    const sat = pick(6);
+    const sun = pick(0);
+    if (!sat && !sun) {
+      window.alert("이번 달에 저장할 정규 수업이 없습니다. 먼저 ‘기본 일정으로 생성’을 눌러 주세요.");
+      return;
+    }
+
+    pushUndo("현재 달을 기본 일정으로 저장");
+    setBaseSchedule((prev) => ({
+      saturday: sat || prev.saturday,
+      sunday: sun || prev.sunday,
+    }));
+    setSaveStatus("현재 달 정규 수업을 기본 일정으로 저장함");
   };
 
   const requestSwap = (id) => {
@@ -657,10 +834,22 @@ export default function Page() {
               </div>
             )}
             {(lesson.swapHistory || []).length > 0 && (
-              <div className="mt-1 rounded-lg bg-orange-200 px-2 py-1 text-[11px] font-bold text-orange-900">
+              <div className="mt-1 space-y-1 rounded-lg bg-orange-100 p-2 text-[11px] text-orange-900">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold">대타 내역</span>
+                  <button onClick={() => clearLessonSwap(lesson.id)} className="rounded bg-white px-2 py-0.5 font-semibold text-orange-700 hover:bg-orange-50">
+                    전체 초기화
+                  </button>
+                </div>
                 {lesson.swapHistory.map((item, index) => (
-                  <div key={index}>{item.from} → {item.to}</div>
+                  <div key={index} className="flex items-center justify-between rounded bg-white px-2 py-1">
+                    <span className="font-semibold">{item.from} → {item.to}</span>
+                    <button onClick={() => removeSwapHistoryEntry(lesson.id, index)} className="px-1 text-slate-400 hover:text-red-500">
+                      ×
+                    </button>
+                  </div>
                 ))}
+                <p className="text-[10px] text-orange-700">조교 칸을 직접 바꾸면 위 배정이 수정됩니다. 표시만 지우려면 ×, 전부 지우려면 ‘전체 초기화’.</p>
               </div>
             )}
             <div className="mt-2 flex gap-1">
@@ -730,12 +919,23 @@ export default function Page() {
             </div>
             <div className="mt-2 space-y-1">
               {lesson.assistants.map((name, index) => (
-                <AssistantSlot key={`${lesson.id}-base-${index}`} value={name} assistants={assistants} onChange={(value) => updateBaseAssistant(dayKey, lesson.id, index, value)} onRemove={() => updateBaseAssistant(dayKey, lesson.id, index, NO_PERSON)} />
+                <AssistantSlot
+                  key={`${lesson.id}-base-${index}`}
+                  value={name}
+                  assistants={assistants}
+                  onChange={(value) => updateBaseAssistant(dayKey, lesson.id, index, value)}
+                  onRemove={() => removeBaseAssistantSlot(dayKey, lesson.id, index)}
+                />
               ))}
             </div>
-            <button onClick={() => deleteBaseLesson(dayKey, lesson.id)} className="mt-2 rounded-lg bg-red-50 px-2 py-1 text-xs text-red-600">
-              삭제
-            </button>
+            <div className="mt-2 flex gap-2">
+              <button onClick={() => addBaseAssistantSlot(dayKey, lesson.id)} className="rounded-lg bg-slate-100 px-2 py-1 text-xs">
+                + 조교 칸 추가
+              </button>
+              <button onClick={() => deleteBaseLesson(dayKey, lesson.id)} className="rounded-lg bg-red-50 px-2 py-1 text-xs text-red-600">
+                삭제
+              </button>
+            </div>
           </div>
         ))}
       </div>
@@ -879,10 +1079,31 @@ export default function Page() {
                 <h2 className="flex items-center gap-2 text-xl font-semibold">
                   <Settings size={20} /> 기본 일정 설정
                 </h2>
-                <p className="mt-1 text-sm text-slate-500">수정 후 ‘기본 일정으로 생성’을 누르면 선택한 달에 반영됩니다.</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  여기서 수정하면 자동으로 기본 일정에 저장됩니다. ‘기본 일정으로 생성’을 누르면 선택한 달의 토·일 정규 수업이 이 내용으로 다시 생성됩니다.
+                </p>
+                <p className="mt-1 text-xs text-emerald-700">현재 저장 상태: {saveStatus}</p>
               </div>
               <BaseScheduleEditor dayKey="saturday" label="토요일 기본" tone="bg-rose-50" />
               <BaseScheduleEditor dayKey="sunday" label="일요일 기본" tone="bg-blue-50" />
+              <Button onClick={saveNow} className="w-full rounded-xl">
+                <Save size={16} className="mr-1" />기본 일정 저장
+              </Button>
+              <div className="rounded-2xl bg-amber-50 p-3 text-sm">
+                <p className="font-semibold text-amber-800">이번 달 배정 → 기본 일정으로 저장</p>
+                <p className="mt-1 text-xs text-amber-700">
+                  캘린더에서 직접 바꾼 이번 달 토·일 정규 수업 배정을 기본 일정으로 덮어씁니다. (각 요일 첫 주 기준)
+                </p>
+                <Button
+                  onClick={() => {
+                    if (window.confirm("이번 달 정규 수업 배정을 기본 일정으로 저장할까요? 기존 기본 일정이 덮어쓰기 됩니다.")) saveCurrentMonthAsBase();
+                  }}
+                  variant="secondary"
+                  className="mt-2 w-full rounded-xl"
+                >
+                  이번 달 정규 → 기본 일정으로 저장
+                </Button>
+              </div>
             </div>
           )}
 
@@ -967,18 +1188,32 @@ export default function Page() {
           <h2 className="flex items-center gap-2 text-xl font-semibold">
             <Users size={20} /> 조교 관리
           </h2>
-          <div className="flex gap-2">
-            <TextInput className="min-w-0 flex-1 rounded-xl border p-2" value={newAssistant} onCommit={setNewAssistant} placeholder="조교 이름" />
-            <Button onClick={addAssistant} variant="secondary" className="rounded-xl">
-              <UserPlus size={16} />
-            </Button>
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <TextInput className="min-w-0 flex-1 rounded-xl border p-2" value={newAssistant} onCommit={setNewAssistant} placeholder="조교 이름" />
+              <TextInput className="w-24 rounded-xl border p-2" value={newAssistantPassword} onCommit={setNewAssistantPassword} placeholder="비밀번호" />
+              <Button onClick={addAssistant} variant="secondary" className="rounded-xl">
+                <UserPlus size={16} />
+              </Button>
+            </div>
+            <p className="text-xs text-slate-500">비밀번호를 비우면 기본값 {DEFAULT_ASSISTANT_PASSWORD} 으로 설정됩니다.</p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {assistants.map((name) => (
-              <span key={name} className="rounded-full bg-slate-100 px-3 py-1 text-sm">
-                {name}
-              </span>
-            ))}
+          <div className="space-y-2">
+            <p className="text-sm font-semibold text-slate-600">조교별 비밀번호</p>
+            {assistants
+              .filter((name) => name !== NO_PERSON)
+              .map((name) => (
+                <div key={name} className="flex items-center gap-2 rounded-xl bg-slate-100 p-2">
+                  <span className="min-w-0 flex-1 truncate text-sm font-semibold">{name}</span>
+                  <TextInput
+                    className="w-28 rounded-lg border bg-white px-2 py-1 text-sm"
+                    value={assistantPasswords[name] || ""}
+                    onCommit={(value) => setAssistantPassword(name, value)}
+                    placeholder="미설정"
+                  />
+                </div>
+              ))}
+            <p className="text-xs text-slate-500">조교는 본인 이름 + 이 비밀번호로 조교 화면에 입장합니다.</p>
           </div>
         </CardContent>
       </Card>
@@ -1016,16 +1251,15 @@ export default function Page() {
         <h2 className="flex items-center gap-2 text-xl font-semibold">
           <User size={20} /> 조교 화면
         </h2>
-        <label className="block space-y-2 text-sm">
-          내 이름
-          <select className="w-full rounded-xl border px-3 py-2" value={currentAssistant} onChange={(e) => setCurrentAssistant(e.target.value)}>
-            {assistants
-              .filter((name) => name !== NO_PERSON)
-              .map((name) => (
-                <option key={name}>{name}</option>
-              ))}
-          </select>
-        </label>
+        <div className="flex items-center justify-between rounded-2xl bg-slate-100 p-3">
+          <div className="min-w-0">
+            <p className="text-xs text-slate-500">로그인</p>
+            <p className="truncate text-lg font-bold">{currentAssistant}</p>
+          </div>
+          <Button onClick={assistantLogout} variant="secondary" className="rounded-xl">
+            로그아웃
+          </Button>
+        </div>
         <div className="rounded-2xl bg-slate-100 p-4">
           <p className="text-sm text-slate-500">이번 달 출근</p>
           <p className="text-3xl font-bold">{visibleLessons.length}회</p>
@@ -1113,11 +1347,50 @@ export default function Page() {
           </section>
         ) : isAllView ? (
           <ScheduleView />
-        ) : (
+        ) : assistantUnlocked ? (
           <section className="grid gap-6 lg:grid-cols-[320px_1fr]">
             <AssistantPanel />
             <ScheduleView />
           </section>
+        ) : (
+          <Card className="mx-auto w-full max-w-md rounded-3xl border-none shadow-sm">
+            <CardContent className="space-y-4 p-6">
+              <h2 className="flex items-center gap-2 text-xl font-semibold">
+                <User size={20} /> 조교 로그인
+              </h2>
+              <p className="text-sm text-slate-500">본인 이름을 선택하고 비밀번호를 입력하면 출근 일정 확인과 대타 신청을 할 수 있어요.</p>
+              <label className="block space-y-1 text-sm">
+                이름
+                <select
+                  className="w-full rounded-xl border px-3 py-2"
+                  value={assistantLoginName}
+                  onChange={(e) => setAssistantLoginName(e.target.value)}
+                >
+                  {assistants
+                    .filter((name) => name !== NO_PERSON)
+                    .map((name) => (
+                      <option key={name}>{name}</option>
+                    ))}
+                </select>
+              </label>
+              <label className="block space-y-1 text-sm">
+                비밀번호
+                <input
+                  type="password"
+                  className="w-full rounded-xl border px-3 py-2"
+                  value={assistantLoginPassword}
+                  onChange={(e) => setAssistantLoginPassword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") assistantLogin();
+                  }}
+                  placeholder="비밀번호"
+                />
+              </label>
+              <Button onClick={assistantLogin} className="w-full rounded-xl">
+                입장
+              </Button>
+            </CardContent>
+          </Card>
         )}
       </div>
     </main>
