@@ -261,6 +261,8 @@ export default function Page() {
   const [storageReady, setStorageReady] = useState(false);
   const [swapApprovals, setSwapApprovals] = useState({});
   const [addWeekday, setAddWeekday] = useState("1");
+  const [justCopiedSettlement, setJustCopiedSettlement] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [extra, setExtra] = useState({
     date: dateKey(today),
     title: "추가 수업",
@@ -561,9 +563,14 @@ export default function Page() {
 
   const copySettlement = async () => {
     if (!settlementText) return;
+    const markCopied = () => {
+      setJustCopiedSettlement(true);
+      window.setTimeout(() => setJustCopiedSettlement(false), 1500);
+    };
     try {
       await navigator.clipboard.writeText(settlementText);
       setSaveStatus("정산 내역 복사됨 ✓");
+      markCopied();
     } catch {
       const ta = document.createElement("textarea");
       ta.value = settlementText;
@@ -572,6 +579,7 @@ export default function Page() {
       try {
         document.execCommand("copy");
         setSaveStatus("정산 내역 복사됨 ✓");
+        markCopied();
       } catch {
         window.alert("복사에 실패했습니다. 텍스트를 직접 선택해서 복사해 주세요.");
       }
@@ -967,21 +975,50 @@ export default function Page() {
     downloadCsv(`혜성코멧_${year}년${month}월_조교별출근.csv`, rows);
   };
 
-  const printSchedule = () => {
+  const exportImage = async () => {
     if (typeof window === "undefined") return;
-    // 인쇄는 항상 전체 일정 + 캘린더 모드로 (편집 UI 대신 컴팩트 카드가 인쇄됨)
+    setExporting(true);
+    // 캡처를 위해 잠깐 전체 일정 + 캘린더 + 데스크탑 모드로 전환
     const prevMode = viewMode;
     const prevRole = role;
     const prevSelected = selectedAssistant;
+    const prevDevice = deviceMode;
     if (viewMode !== "calendar") setViewMode("calendar");
     if (role !== "all") setRole("all");
     if (selectedAssistant !== "전체") setSelectedAssistant("전체");
-    window.setTimeout(() => {
-      window.print();
+    if (deviceMode !== "web") setDeviceMode("web");
+    // 렌더링 반영 대기
+    await new Promise((r) => window.setTimeout(r, 250));
+    try {
+      const target = document.getElementById("schedule-capture");
+      if (!target) throw new Error("캡처 대상 요소를 찾지 못했습니다.");
+      const { toPng } = await import("html-to-image");
+      const dataUrl = await toPng(target, {
+        pixelRatio: 2,
+        backgroundColor: "#ffffff",
+        cacheBust: true,
+      });
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = `혜성코멧_${year}년${month}월_출근표.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setSaveStatus("이미지 저장됨 ✓");
+    } catch (e) {
+      console.error("이미지 저장 실패", e);
+      window.alert(
+        "이미지 저장에 실패했습니다.\n터미널에서 다음을 실행해 라이브러리를 설치했는지 확인해 주세요:\n\nnpm install html-to-image\n\n(에러: " +
+          (e?.message || e) +
+          ")"
+      );
+    } finally {
       if (prevMode !== "calendar") setViewMode(prevMode);
       if (prevRole !== "all") setRole(prevRole);
       if (prevSelected !== "전체") setSelectedAssistant(prevSelected);
-    }, 150);
+      if (prevDevice !== "web") setDeviceMode(prevDevice);
+      setExporting(false);
+    }
   };
 
   const LessonCard = ({ lesson, compact = false, calendarView = false }) => {
@@ -1228,7 +1265,7 @@ export default function Page() {
     const mobile = deviceMode === "mobile";
 
     return (
-      <Card className="rounded-3xl border-none shadow-sm">
+      <Card id="schedule-capture" className="rounded-3xl border-none shadow-sm">
         <CardContent className="p-4 md:p-5">
           <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <h2 className="flex items-center gap-2 text-xl font-semibold">
@@ -1456,7 +1493,7 @@ export default function Page() {
       <Card className="rounded-3xl border-none shadow-sm print:hidden">
         <CardContent className="space-y-3 p-5">
           <h2 className="text-xl font-semibold">내보내기</h2>
-          <p className="text-xs text-slate-500">이번 달({year}년 {month}월) 데이터를 다운로드하거나 인쇄합니다.</p>
+          <p className="text-xs text-slate-500">이번 달({year}년 {month}월) 데이터를 다운로드합니다.</p>
           <div className="space-y-2">
             <Button onClick={exportScheduleCsv} variant="secondary" className="w-full rounded-xl">
               CSV: 월간 출근표 (엑셀 열기)
@@ -1464,12 +1501,12 @@ export default function Page() {
             <Button onClick={exportAssistantSummaryCsv} variant="secondary" className="w-full rounded-xl">
               CSV: 조교별 출근 요약
             </Button>
-            <Button onClick={printSchedule} className="w-full rounded-xl">
-              인쇄 / PDF 저장
+            <Button onClick={exportImage} disabled={exporting} className="w-full rounded-xl">
+              {exporting ? "이미지 생성 중..." : "PNG 이미지 저장 (캘린더)"}
             </Button>
           </div>
           <p className="text-[11px] text-slate-500">
-            인쇄 창에서 ‘PDF로 저장’을 선택하면 카톡 공유용 파일이 생성됩니다. 캘린더는 가로 방향(landscape)이 잘 맞습니다.
+            PNG는 전체 일정 캘린더를 그대로 캡처합니다. 그대로 카카오톡·이메일에 붙여 넣을 수 있어요.
           </p>
         </CardContent>
       </Card>
@@ -1586,9 +1623,13 @@ export default function Page() {
               <p className="text-sm font-semibold">정산 내역</p>
               <button
                 onClick={copySettlement}
-                className="rounded-lg bg-white px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold shadow-sm transition-all active:scale-95 ${
+                  justCopiedSettlement
+                    ? "bg-emerald-500 text-white shadow-emerald-200"
+                    : "bg-white text-slate-700 hover:bg-slate-50 active:bg-slate-200"
+                }`}
               >
-                복사
+                {justCopiedSettlement ? "복사됨 ✓" : "복사"}
               </button>
             </div>
             <pre className="whitespace-pre-wrap break-words rounded-xl bg-white p-3 font-mono text-xs leading-relaxed text-slate-800">
