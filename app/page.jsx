@@ -262,6 +262,7 @@ export default function Page() {
   const [swapApprovals, setSwapApprovals] = useState({});
   const [addWeekday, setAddWeekday] = useState("1");
   const [justCopiedSettlement, setJustCopiedSettlement] = useState(false);
+  const [justCopiedDaily, setJustCopiedDaily] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [extra, setExtra] = useState({
     date: dateKey(today),
@@ -579,6 +580,59 @@ export default function Page() {
       try {
         document.execCommand("copy");
         setSaveStatus("정산 내역 복사됨 ✓");
+        markCopied();
+      } catch {
+        window.alert("복사에 실패했습니다. 텍스트를 직접 선택해서 복사해 주세요.");
+      }
+      document.body.removeChild(ta);
+    }
+  };
+
+  // 날짜별 출근 내역 (정규 수업만, 반 숫자만 추림)
+  const dailyText = useMemo(() => {
+    const monthPrefix = `${year}-${pad(month)}-`;
+    const shortNum = (title) => title.replace(/^(한성|세종)\s+/, "").replace(/기$/, "").trim();
+    const byDate = {};
+    lessons
+      .filter((l) => l.date.startsWith(monthPrefix) && l.type === "regular" && l.assistants.includes(currentAssistant))
+      .forEach((l) => {
+        (byDate[l.date] ||= new Set()).add(shortNum(l.title));
+      });
+    const dates = Object.keys(byDate).sort();
+    if (!dates.length) return "";
+    const lines = ["<정규수업>"];
+    dates.forEach((date) => {
+      const d = new Date(`${date}T00:00:00`);
+      const md = `${d.getMonth() + 1}/${d.getDate()}(${days[d.getDay()]})`;
+      const sorted = [...byDate[date]].sort((a, b) => {
+        const na = parseInt(a, 10);
+        const nb = parseInt(b, 10);
+        if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
+        return a.localeCompare(b);
+      });
+      lines.push(`${md} ${sorted.join(",")}`);
+    });
+    return lines.join("\n");
+  }, [lessons, currentAssistant, year, month]);
+
+  const copyDaily = async () => {
+    if (!dailyText) return;
+    const markCopied = () => {
+      setJustCopiedDaily(true);
+      window.setTimeout(() => setJustCopiedDaily(false), 1500);
+    };
+    try {
+      await navigator.clipboard.writeText(dailyText);
+      setSaveStatus("날짜별 출근 복사됨 ✓");
+      markCopied();
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = dailyText;
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand("copy");
+        setSaveStatus("날짜별 출근 복사됨 ✓");
         markCopied();
       } catch {
         window.alert("복사에 실패했습니다. 텍스트를 직접 선택해서 복사해 주세요.");
@@ -1634,6 +1688,26 @@ export default function Page() {
             </div>
             <pre className="whitespace-pre-wrap break-words rounded-xl bg-white p-3 font-mono text-xs leading-relaxed text-slate-800">
 {settlementText}
+            </pre>
+          </div>
+        )}
+        {dailyText && (
+          <div className="rounded-2xl bg-slate-100 p-4">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-sm font-semibold">날짜별 출근</p>
+              <button
+                onClick={copyDaily}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold shadow-sm transition-all active:scale-95 ${
+                  justCopiedDaily
+                    ? "bg-emerald-500 text-white shadow-emerald-200"
+                    : "bg-white text-slate-700 hover:bg-slate-50 active:bg-slate-200"
+                }`}
+              >
+                {justCopiedDaily ? "복사됨 ✓" : "복사"}
+              </button>
+            </div>
+            <pre className="whitespace-pre-wrap break-words rounded-xl bg-white p-3 font-mono text-xs leading-relaxed text-slate-800">
+{dailyText}
             </pre>
           </div>
         )}
