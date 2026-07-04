@@ -41,19 +41,41 @@ const NO_PERSON = "인원 없음";
 const days = ["일", "월", "화", "수", "목", "금", "토"];
 const classNames = ["한성 33기", "한성 34기", "한성 35기", "세종 17기", "세종 19기"];
 
+// 기본 일정은 요일 번호(0=일 ~ 6=토)로 저장. 토·일은 기본 채워두고, 나머지 요일은 비워둠.
 const defaultBaseSchedule = {
-  saturday: [
+  0: [
+    { id: "sun-1", title: "세종 17기", start: "09:30", end: "12:30", assistants: ["강지후", NO_PERSON] },
+    { id: "sun-2", title: "한성 34기", start: "13:00", end: "16:00", assistants: ["강지후", "송은호"] },
+    { id: "sun-3", title: "한성 35기", start: "16:00", end: "19:00", assistants: ["강지후", "송은호"] },
+  ],
+  1: [],
+  2: [],
+  3: [],
+  4: [],
+  5: [],
+  6: [
     { id: "sat-1", title: "한성 34기", start: "09:30", end: "12:30", assistants: ["이찬영", "송은호"] },
     { id: "sat-2", title: "한성 35기", start: "13:00", end: "16:00", assistants: ["이찬영", "정율제"] },
     { id: "sat-3", title: "한성 33기", start: "16:00", end: "19:00", assistants: ["이찬영", "정율제"] },
     { id: "sat-4", title: "세종 19기", start: "19:30", end: "22:30", assistants: ["정율제", NO_PERSON] },
   ],
-  sunday: [
-    { id: "sun-1", title: "세종 17기", start: "09:30", end: "12:30", assistants: ["강지후", NO_PERSON] },
-    { id: "sun-2", title: "한성 34기", start: "13:00", end: "16:00", assistants: ["강지후", "송은호"] },
-    { id: "sun-3", title: "한성 35기", start: "16:00", end: "19:00", assistants: ["강지후", "송은호"] },
-  ],
 };
+
+// 저장된 옛 포맷({saturday: [...], sunday: [...]}) → 새 포맷(요일 번호 키)으로 이관
+function normalizeBaseSchedule(input) {
+  const base = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
+  if (!input || typeof input !== "object") return base;
+  if (Array.isArray(input.saturday) || Array.isArray(input.sunday)) {
+    if (Array.isArray(input.sunday)) base[0] = input.sunday;
+    if (Array.isArray(input.saturday)) base[6] = input.saturday;
+    return base;
+  }
+  for (let d = 0; d <= 6; d++) {
+    if (Array.isArray(input[d])) base[d] = input[d];
+    else if (Array.isArray(input[String(d)])) base[d] = input[String(d)];
+  }
+  return base;
+}
 
 const assistantSeed = ["강지후", "송은호", "정율제", "이찬영", NO_PERSON];
 
@@ -119,14 +141,14 @@ function makeLesson({ date, title, start, end, assistants, type, id }) {
   };
 }
 
-function generateMonthLessons(year, month, baseSchedule, vacationSchedules = []) {
+function generateMonthLessons(year, month, baseSchedule) {
   const dates = getMonthDates(year, month).filter((d) => d.getMonth() === month - 1);
   const lessons = [];
 
   dates.forEach((d) => {
     const key = dateKey(d);
     const day = d.getDay();
-    const regular = day === 6 ? baseSchedule.saturday : day === 0 ? baseSchedule.sunday : [];
+    const regular = (baseSchedule && baseSchedule[day]) || [];
 
     regular.forEach((item, index) => {
       lessons.push(
@@ -138,22 +160,6 @@ function generateMonthLessons(year, month, baseSchedule, vacationSchedules = [])
           end: item.end,
           assistants: item.assistants,
           type: "regular",
-        })
-      );
-    });
-
-    vacationSchedules.forEach((item, index) => {
-      if (key < item.startDate || key > item.endDate) return;
-      if (Number(item.weekday) !== day) return;
-      lessons.push(
-        makeLesson({
-          id: `${key}-vacation-${index}`,
-          date: key,
-          title: item.title,
-          start: item.start,
-          end: item.end,
-          assistants: item.assistants,
-          type: "vacation",
         })
       );
     });
@@ -218,9 +224,14 @@ export default function Page() {
   const [currentAssistant, setCurrentAssistant] = useState("강지후");
   const [selectedAssistant, setSelectedAssistant] = useState("전체");
   const [baseSchedule, setBaseSchedule] = useState(defaultBaseSchedule);
-  const [vacationSchedules, setVacationSchedules] = useState([]);
+  // 기본 일정 편집기에서 토·일 외에 어떤 요일을 편집창으로 열어둘지
+  const [enabledWeekdays, setEnabledWeekdays] = useState(() => {
+    const s = new Set([0, 6]);
+    for (let d = 1; d <= 5; d++) if ((defaultBaseSchedule[d] || []).length > 0) s.add(d);
+    return [...s].sort();
+  });
   const [lessons, setLessons] = useState(() =>
-    generateMonthLessons(today.getFullYear(), today.getMonth() + 1, defaultBaseSchedule, [])
+    generateMonthLessons(today.getFullYear(), today.getMonth() + 1, defaultBaseSchedule)
   );
   const [viewMode, setViewMode] = useState("calendar");
   const [deviceMode, setDeviceMode] = useState("web");
@@ -234,18 +245,10 @@ export default function Page() {
   const [saveStatus, setSaveStatus] = useState(supabase ? "DB 연결 준비 중" : "브라우저 저장 모드");
   const [storageReady, setStorageReady] = useState(false);
   const [swapApprovals, setSwapApprovals] = useState({});
+  const [addWeekday, setAddWeekday] = useState("1");
   const [extra, setExtra] = useState({
     date: dateKey(today),
     title: "추가 수업",
-    start: "10:00",
-    end: "13:00",
-    assistants: [NO_PERSON, NO_PERSON],
-  });
-  const [vacationForm, setVacationForm] = useState({
-    startDate: dateKey(today),
-    endDate: dateKey(today),
-    weekday: "1",
-    title: "방학 정규 수업",
     start: "10:00",
     end: "13:00",
     assistants: [NO_PERSON, NO_PERSON],
@@ -267,8 +270,16 @@ export default function Page() {
     if (data.assistantPasswords) setAssistantPasswords(data.assistantPasswords);
     if (data.currentAssistant) setCurrentAssistant(data.currentAssistant);
     if (data.selectedAssistant) setSelectedAssistant(data.selectedAssistant);
-    if (data.baseSchedule) setBaseSchedule(data.baseSchedule);
-    if (data.vacationSchedules) setVacationSchedules(data.vacationSchedules);
+    if (data.baseSchedule) {
+      const normalized = normalizeBaseSchedule(data.baseSchedule);
+      setBaseSchedule(normalized);
+      const s = new Set([0, 6]);
+      for (let d = 0; d <= 6; d++) if ((normalized[d] || []).length > 0) s.add(d);
+      if (Array.isArray(data.enabledWeekdays)) data.enabledWeekdays.forEach((d) => s.add(Number(d)));
+      setEnabledWeekdays([...s].sort());
+    } else if (Array.isArray(data.enabledWeekdays)) {
+      setEnabledWeekdays([...new Set(data.enabledWeekdays.map(Number))].sort());
+    }
     if (data.lessons) setLessons(data.lessons);
     if (data.viewMode) setViewMode(data.viewMode);
     if (data.deviceMode) setDeviceMode(data.deviceMode);
@@ -282,7 +293,7 @@ export default function Page() {
     currentAssistant,
     selectedAssistant,
     baseSchedule,
-    vacationSchedules,
+    enabledWeekdays,
     lessons,
     viewMode,
     deviceMode,
@@ -369,7 +380,7 @@ export default function Page() {
       currentAssistant,
       selectedAssistant,
       baseSchedule,
-      vacationSchedules,
+      enabledWeekdays,
       lessons,
       viewMode,
       deviceMode,
@@ -406,7 +417,7 @@ export default function Page() {
     currentAssistant,
     selectedAssistant,
     baseSchedule,
-    vacationSchedules,
+    enabledWeekdays,
     lessons,
     viewMode,
     deviceMode,
@@ -461,10 +472,33 @@ export default function Page() {
     return result;
   }, [lessons, currentAssistant, year, month]);
 
+  // 조교별로 이번 달 총 출근 횟수 + 수업별 세부 횟수
+  const assistantMonthlyStats = useMemo(() => {
+    const result = {};
+    const monthPrefix = `${year}-${pad(month)}-`;
+    assistants
+      .filter((n) => n !== NO_PERSON)
+      .forEach((n) => {
+        result[n] = { total: 0, byClass: {} };
+      });
+    lessons
+      .filter((lesson) => lesson.date.startsWith(monthPrefix))
+      .forEach((lesson) => {
+        lesson.assistants
+          .filter((n) => n && n !== NO_PERSON)
+          .forEach((name) => {
+            if (!result[name]) result[name] = { total: 0, byClass: {} };
+            result[name].total += 1;
+            result[name].byClass[lesson.title] = (result[name].byClass[lesson.title] || 0) + 1;
+          });
+      });
+    return result;
+  }, [lessons, assistants, year, month]);
+
   const loadMonth = () => {
     pushUndo("기본 일정 생성");
     const monthPrefix = `${year}-${pad(month)}-`;
-    const newMonthLessons = generateMonthLessons(year, month, baseSchedule, vacationSchedules);
+    const newMonthLessons = generateMonthLessons(year, month, baseSchedule);
 
     setLessons((prev) => {
       const otherMonths = prev.filter((lesson) => !lesson.date.startsWith(monthPrefix));
@@ -487,7 +521,7 @@ export default function Page() {
       currentAssistant,
       selectedAssistant,
       baseSchedule,
-      vacationSchedules,
+      enabledWeekdays,
       lessons,
       viewMode,
       deviceMode,
@@ -551,7 +585,6 @@ export default function Page() {
         if (lesson.id !== id) return lesson;
         const next = [...lesson.assistants];
         next[index] = value || NO_PERSON;
-        // 더 이상 배정에 없는 대타 표시는 자동으로 정리
         const cleanedSubs = (lesson.substituteAssistants || []).filter((n) => next.includes(n));
         return { ...lesson, assistants: next, substituteAssistants: cleanedSubs };
       })
@@ -576,7 +609,6 @@ export default function Page() {
     );
   };
 
-  // 대타 승인 후 관리자가 자유롭게 수정/초기화할 수 있도록 추가된 기능
   const clearLessonSwap = (id) => {
     pushUndo("대타 기록 초기화");
     setLessons((prev) =>
@@ -616,27 +648,20 @@ export default function Page() {
     setExtra({ ...extra, title: "추가 수업", assistants: [NO_PERSON, NO_PERSON] });
   };
 
-  const addVacationSchedule = () => {
-    pushUndo("방학 정규 등록");
-    setVacationSchedules((prev) => [
-      ...prev,
-      { ...vacationForm, id: `vacation-${Date.now()}`, assistants: cleanAssistants(vacationForm.assistants) },
-    ]);
-  };
-
-  const updateBaseLesson = (dayKey, id, field, value) => {
+  // 기본 일정(요일별) 편집
+  const updateBaseLesson = (dayNum, id, field, value) => {
     pushUndo("기본 일정 수정");
     setBaseSchedule((prev) => ({
       ...prev,
-      [dayKey]: prev[dayKey].map((lesson) => (lesson.id === id ? { ...lesson, [field]: value } : lesson)),
+      [dayNum]: (prev[dayNum] || []).map((lesson) => (lesson.id === id ? { ...lesson, [field]: value } : lesson)),
     }));
   };
 
-  const updateBaseAssistant = (dayKey, id, index, value) => {
+  const updateBaseAssistant = (dayNum, id, index, value) => {
     pushUndo("기본 조교 변경");
     setBaseSchedule((prev) => ({
       ...prev,
-      [dayKey]: prev[dayKey].map((lesson) => {
+      [dayNum]: (prev[dayNum] || []).map((lesson) => {
         if (lesson.id !== id) return lesson;
         const next = [...lesson.assistants];
         next[index] = value || NO_PERSON;
@@ -645,21 +670,21 @@ export default function Page() {
     }));
   };
 
-  const addBaseAssistantSlot = (dayKey, id) => {
+  const addBaseAssistantSlot = (dayNum, id) => {
     pushUndo("기본 조교 칸 추가");
     setBaseSchedule((prev) => ({
       ...prev,
-      [dayKey]: prev[dayKey].map((lesson) =>
+      [dayNum]: (prev[dayNum] || []).map((lesson) =>
         lesson.id === id ? { ...lesson, assistants: [...lesson.assistants, NO_PERSON] } : lesson
       ),
     }));
   };
 
-  const removeBaseAssistantSlot = (dayKey, id, index) => {
+  const removeBaseAssistantSlot = (dayNum, id, index) => {
     pushUndo("기본 조교 칸 삭제");
     setBaseSchedule((prev) => ({
       ...prev,
-      [dayKey]: prev[dayKey].map((lesson) => {
+      [dayNum]: (prev[dayNum] || []).map((lesson) => {
         if (lesson.id !== id) return lesson;
         const next = lesson.assistants.filter((_, i) => i !== index);
         return { ...lesson, assistants: next.length ? next : [NO_PERSON] };
@@ -667,59 +692,84 @@ export default function Page() {
     }));
   };
 
-  const addBaseLesson = (dayKey) => {
+  const addBaseLesson = (dayNum) => {
     pushUndo("기본 수업 추가");
     setBaseSchedule((prev) => ({
       ...prev,
-      [dayKey]: [
-        ...prev[dayKey],
-        { id: `${dayKey}-${Date.now()}`, title: "새 정규 수업", start: "10:00", end: "13:00", assistants: [NO_PERSON, NO_PERSON] },
+      [dayNum]: [
+        ...(prev[dayNum] || []),
+        { id: `d${dayNum}-${Date.now()}`, title: "새 정규 수업", start: "10:00", end: "13:00", assistants: [NO_PERSON, NO_PERSON] },
       ],
     }));
   };
 
-  const deleteBaseLesson = (dayKey, id) => {
+  const deleteBaseLesson = (dayNum, id) => {
     pushUndo("기본 수업 삭제");
-    setBaseSchedule((prev) => ({ ...prev, [dayKey]: prev[dayKey].filter((lesson) => lesson.id !== id) }));
+    setBaseSchedule((prev) => ({ ...prev, [dayNum]: (prev[dayNum] || []).filter((lesson) => lesson.id !== id) }));
   };
 
-  // 현재 달의 토·일 정규 수업 배정을 기본 일정으로 저장 (각 요일 첫 주 기준)
+  const enableWeekday = (dayNum) => {
+    const n = Number(dayNum);
+    if (Number.isNaN(n) || n < 0 || n > 6) return;
+    if (enabledWeekdays.includes(n)) return;
+    pushUndo(`${days[n]}요일 편집칸 추가`);
+    setEnabledWeekdays([...enabledWeekdays, n].sort((a, b) => a - b));
+  };
+
+  const disableWeekday = (dayNum) => {
+    const n = Number(dayNum);
+    if (n === 0 || n === 6) return; // 토·일은 항상 유지
+    const lessonsOnDay = (baseSchedule[n] || []).length;
+    if (lessonsOnDay > 0) {
+      if (!window.confirm(`${days[n]}요일에 등록된 수업 ${lessonsOnDay}개도 함께 지웁니다. 계속할까요?`)) return;
+    }
+    pushUndo(`${days[n]}요일 편집칸 제거`);
+    setBaseSchedule((prev) => ({ ...prev, [n]: [] }));
+    setEnabledWeekdays(enabledWeekdays.filter((d) => d !== n));
+  };
+
+  // 현재 달의 정규 수업 배정을 요일별 기본 일정으로 저장 (각 요일 첫 등장 주 기준)
   const saveCurrentMonthAsBase = () => {
     const monthPrefix = `${year}-${pad(month)}-`;
     const monthly = lessons.filter((l) => l.date.startsWith(monthPrefix) && l.type === "regular");
 
-    const pick = (targetDay) => {
+    const nextBase = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
+    let touched = false;
+
+    for (let dayNum = 0; dayNum <= 6; dayNum++) {
       const byDate = {};
       monthly.forEach((l) => {
         const d = new Date(`${l.date}T00:00:00`).getDay();
-        if (d !== targetDay) return;
+        if (d !== dayNum) return;
         (byDate[l.date] ||= []).push(l);
       });
       const dates = Object.keys(byDate).sort();
-      if (!dates.length) return null;
-      return byDate[dates[0]]
+      if (!dates.length) {
+        nextBase[dayNum] = baseSchedule[dayNum] || [];
+        continue;
+      }
+      touched = true;
+      nextBase[dayNum] = byDate[dates[0]]
         .sort((a, b) => a.start.localeCompare(b.start))
         .map((l, i) => ({
-          id: `${targetDay === 6 ? "sat" : "sun"}-${i + 1}`,
+          id: `d${dayNum}-${i + 1}`,
           title: l.title,
           start: l.start,
           end: l.end,
           assistants: cleanAssistants(l.assistants),
         }));
-    };
+    }
 
-    const sat = pick(6);
-    const sun = pick(0);
-    if (!sat && !sun) {
+    if (!touched) {
       window.alert("이번 달에 저장할 정규 수업이 없습니다. 먼저 ‘기본 일정으로 생성’을 눌러 주세요.");
       return;
     }
 
     pushUndo("현재 달을 기본 일정으로 저장");
-    setBaseSchedule((prev) => ({
-      saturday: sat || prev.saturday,
-      sunday: sun || prev.sunday,
-    }));
+    setBaseSchedule(nextBase);
+    const s = new Set(enabledWeekdays);
+    for (let d = 0; d <= 6; d++) if ((nextBase[d] || []).length > 0) s.add(d);
+    setEnabledWeekdays([...s].sort((a, b) => a - b));
     setSaveStatus("현재 달 정규 수업을 기본 일정으로 저장함");
   };
 
@@ -764,16 +814,63 @@ export default function Page() {
     setLessons((prev) => prev.filter((lesson) => lesson.id !== id));
   };
 
-  const deleteVacationSchedule = (id) => {
-    pushUndo("방학 정규 삭제");
-    setVacationSchedules((prev) => prev.filter((schedule) => schedule.id !== id));
-  };
-
-  const LessonCard = ({ lesson, compact = false }) => {
+  const LessonCard = ({ lesson, compact = false, calendarView = false }) => {
     const isSat = new Date(`${lesson.date}T00:00:00`).getDay() === 6;
-    const bg = lesson.type === "extra" ? "bg-fuchsia-100" : lesson.type === "vacation" ? "bg-emerald-100" : isSat ? "bg-rose-100" : "bg-blue-100";
+    const bg = lesson.type === "extra" ? "bg-fuchsia-100" : isSat ? "bg-rose-100" : "bg-blue-100";
     const requested = lesson.swapRequests.includes(currentAssistant);
     const mobile = deviceMode === "mobile";
+
+    // 캘린더 셀 안: 관리자 아닌 화면(전체/조교)에서는 초압축 렌더로 세로 길이 최소화
+    if (calendarView && !isAdmin) {
+      return (
+        <div className={`rounded-lg ${bg} p-1.5 text-[11px] leading-tight`}>
+          <div className="flex items-baseline justify-between gap-1">
+            <span className="truncate font-bold">{lesson.title}</span>
+            {lesson.type === "extra" && (
+              <span className="shrink-0 rounded-full bg-white/80 px-1.5 text-[9px] text-slate-600">추가</span>
+            )}
+          </div>
+          <div className="text-[10px] text-slate-500">
+            {lesson.start}~{lesson.end}
+          </div>
+          <div className="mt-0.5 flex flex-wrap gap-0.5">
+            {sortAssistantsForDisplay(lesson.assistants)
+              .filter((n) => n !== NO_PERSON)
+              .map((name, i) => (
+                <span
+                  key={`${name}-${i}`}
+                  className={`rounded px-1 text-[10px] ${
+                    lesson.substituteAssistants?.includes(name)
+                      ? "bg-orange-200 font-bold text-orange-900"
+                      : "bg-white/80"
+                  }`}
+                >
+                  {name}
+                </span>
+              ))}
+          </div>
+          {(lesson.swapHistory || []).length > 0 && (
+            <div className="mt-0.5 text-[9px] font-bold leading-tight text-orange-800">
+              {lesson.swapHistory.map((h, i) => (
+                <div key={i}>
+                  {h.from}→{h.to}
+                </div>
+              ))}
+            </div>
+          )}
+          {role === "assistant" && (
+            <button
+              onClick={() => (requested ? cancelSwapRequest(lesson.id) : requestSwap(lesson.id))}
+              className={`mt-1 h-5 w-full rounded text-[10px] font-semibold ${
+                requested ? "bg-slate-200 text-slate-700" : "bg-slate-800 text-white"
+              }`}
+            >
+              {requested ? "대타 취소" : "대타 요청"}
+            </button>
+          )}
+        </div>
+      );
+    }
 
     return (
       <div className={`rounded-xl shadow-sm ${bg} ${mobile ? "min-h-[92px] p-2 text-[11px] leading-snug" : "p-2 text-xs"}`}>
@@ -786,7 +883,7 @@ export default function Page() {
             </div>
           </div>
           <span className="w-fit rounded-full bg-white/80 px-2 py-0.5 text-[11px] text-slate-500">
-            {lesson.type === "extra" ? "추가" : lesson.type === "vacation" ? "방학 정규" : "정규"}
+            {lesson.type === "extra" ? "추가" : "정규"}
           </span>
         </div>
 
@@ -901,46 +998,62 @@ export default function Page() {
     );
   };
 
-  const BaseScheduleEditor = ({ dayKey, label, tone }) => (
-    <div className={`rounded-2xl p-3 ${tone}`}>
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="font-bold">{label}</h3>
-        <button onClick={() => addBaseLesson(dayKey)} className="rounded-lg bg-white px-2 py-1 text-xs">
-          + 수업
-        </button>
-      </div>
-      <div className="space-y-3">
-        {baseSchedule[dayKey].map((lesson) => (
-          <div key={lesson.id} className="rounded-xl bg-white/80 p-3 text-sm">
-            <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-              <TextInput className="rounded-lg border px-2 py-1" value={lesson.title} onCommit={(value) => updateBaseLesson(dayKey, lesson.id, "title", value)} />
-              <input className="rounded-lg border px-2 py-1" type="time" value={lesson.start} onChange={(e) => updateBaseLesson(dayKey, lesson.id, "start", e.target.value)} />
-              <input className="rounded-lg border px-2 py-1" type="time" value={lesson.end} onChange={(e) => updateBaseLesson(dayKey, lesson.id, "end", e.target.value)} />
-            </div>
-            <div className="mt-2 space-y-1">
-              {lesson.assistants.map((name, index) => (
-                <AssistantSlot
-                  key={`${lesson.id}-base-${index}`}
-                  value={name}
-                  assistants={assistants}
-                  onChange={(value) => updateBaseAssistant(dayKey, lesson.id, index, value)}
-                  onRemove={() => removeBaseAssistantSlot(dayKey, lesson.id, index)}
-                />
-              ))}
-            </div>
-            <div className="mt-2 flex gap-2">
-              <button onClick={() => addBaseAssistantSlot(dayKey, lesson.id)} className="rounded-lg bg-slate-100 px-2 py-1 text-xs">
-                + 조교 칸 추가
+  const BaseScheduleEditor = ({ dayNum }) => {
+    const label = `${days[dayNum]}요일 기본`;
+    const tone =
+      dayNum === 6 ? "bg-rose-50" : dayNum === 0 ? "bg-blue-50" : "bg-slate-100";
+    const removable = dayNum !== 0 && dayNum !== 6;
+    return (
+      <div className={`rounded-2xl p-3 ${tone}`}>
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="font-bold">{label}</h3>
+          <div className="flex gap-1">
+            <button onClick={() => addBaseLesson(dayNum)} className="rounded-lg bg-white px-2 py-1 text-xs">
+              + 수업
+            </button>
+            {removable && (
+              <button onClick={() => disableWeekday(dayNum)} className="rounded-lg bg-red-50 px-2 py-1 text-xs text-red-600">
+                요일 제거
               </button>
-              <button onClick={() => deleteBaseLesson(dayKey, lesson.id)} className="rounded-lg bg-red-50 px-2 py-1 text-xs text-red-600">
-                삭제
-              </button>
-            </div>
+            )}
           </div>
-        ))}
+        </div>
+        <div className="space-y-3">
+          {(baseSchedule[dayNum] || []).length === 0 && (
+            <p className="rounded-xl bg-white/60 p-3 text-xs text-slate-500">등록된 수업이 없습니다. ‘+ 수업’으로 추가해 주세요.</p>
+          )}
+          {(baseSchedule[dayNum] || []).map((lesson) => (
+            <div key={lesson.id} className="rounded-xl bg-white/80 p-3 text-sm">
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+                <TextInput className="rounded-lg border px-2 py-1" value={lesson.title} onCommit={(value) => updateBaseLesson(dayNum, lesson.id, "title", value)} />
+                <input className="rounded-lg border px-2 py-1" type="time" value={lesson.start} onChange={(e) => updateBaseLesson(dayNum, lesson.id, "start", e.target.value)} />
+                <input className="rounded-lg border px-2 py-1" type="time" value={lesson.end} onChange={(e) => updateBaseLesson(dayNum, lesson.id, "end", e.target.value)} />
+              </div>
+              <div className="mt-2 space-y-1">
+                {lesson.assistants.map((name, index) => (
+                  <AssistantSlot
+                    key={`${lesson.id}-base-${index}`}
+                    value={name}
+                    assistants={assistants}
+                    onChange={(value) => updateBaseAssistant(dayNum, lesson.id, index, value)}
+                    onRemove={() => removeBaseAssistantSlot(dayNum, lesson.id, index)}
+                  />
+                ))}
+              </div>
+              <div className="mt-2 flex gap-2">
+                <button onClick={() => addBaseAssistantSlot(dayNum, lesson.id)} className="rounded-lg bg-slate-100 px-2 py-1 text-xs">
+                  + 조교 칸 추가
+                </button>
+                <button onClick={() => deleteBaseLesson(dayNum, lesson.id)} className="rounded-lg bg-red-50 px-2 py-1 text-xs text-red-600">
+                  삭제
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const ScheduleView = () => {
     const mobile = deviceMode === "mobile";
@@ -992,14 +1105,14 @@ export default function Page() {
                   const isSun = d.getDay() === 0;
                   const bg = !inMonth ? "bg-slate-50 text-slate-300" : isSat ? "bg-rose-50" : isSun ? "bg-blue-50" : "bg-white";
                   return (
-                    <div key={key} className={`border text-left ${bg} ${mobile ? "min-h-[160px] p-1.5" : "min-h-[220px] p-2"}`}>
-                      <div className="mb-2 flex justify-between">
+                    <div key={key} className={`border text-left ${bg} ${mobile ? "min-h-[110px] p-1.5" : isAdmin ? "min-h-[180px] p-2" : "min-h-[110px] p-1.5"}`}>
+                      <div className="mb-1 flex justify-between">
                         <span className="font-bold">{d.getDate()}</span>
-                        {inMonth && (isSat || isSun) && <span className="rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-500">정규</span>}
+                        {inMonth && (isSat || isSun) && <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-slate-500">정규</span>}
                       </div>
-                      <div className={mobile ? "space-y-1" : "space-y-2"}>
+                      <div className="space-y-1">
                         {(lessonsByDate[key] || []).map((lesson) => (
-                          <LessonCard key={lesson.id} lesson={lesson} />
+                          <LessonCard key={lesson.id} lesson={lesson} calendarView />
                         ))}
                       </div>
                     </div>
@@ -1019,6 +1132,8 @@ export default function Page() {
     );
   };
 
+  const availableToAdd = [1, 2, 3, 4, 5].filter((d) => !enabledWeekdays.includes(d));
+
   const AdminPanel = () => (
     <aside className="space-y-6">
       <Card className="rounded-3xl border-none shadow-sm">
@@ -1029,9 +1144,6 @@ export default function Page() {
             </button>
             <button onClick={() => setRightTab("base")} className={`rounded-lg px-3 py-2 text-sm ${rightTab === "base" ? "bg-white shadow-sm" : ""}`}>
               <Settings size={15} className="mr-1 inline" />기본 일정
-            </button>
-            <button onClick={() => setRightTab("vacation")} className={`rounded-lg px-3 py-2 text-sm ${rightTab === "vacation" ? "bg-white shadow-sm" : ""}`}>
-              <CalendarDays size={15} className="mr-1 inline" />방학 정규
             </button>
           </div>
 
@@ -1080,19 +1192,47 @@ export default function Page() {
                   <Settings size={20} /> 기본 일정 설정
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  여기서 수정하면 자동으로 기본 일정에 저장됩니다. ‘기본 일정으로 생성’을 누르면 선택한 달의 토·일 정규 수업이 이 내용으로 다시 생성됩니다.
+                  요일별로 기본 수업을 등록해 두면 ‘기본 일정으로 생성’을 눌렀을 때 그 달의 해당 요일마다 자동 생성됩니다.
                 </p>
                 <p className="mt-1 text-xs text-emerald-700">현재 저장 상태: {saveStatus}</p>
               </div>
-              <BaseScheduleEditor dayKey="saturday" label="토요일 기본" tone="bg-rose-50" />
-              <BaseScheduleEditor dayKey="sunday" label="일요일 기본" tone="bg-blue-50" />
+
+              {availableToAdd.length > 0 && (
+                <div className="flex items-center gap-2 rounded-2xl bg-slate-50 p-3 text-sm">
+                  <span className="font-semibold">요일 추가</span>
+                  <select className="rounded-lg border bg-white px-2 py-1" value={addWeekday} onChange={(e) => setAddWeekday(e.target.value)}>
+                    {availableToAdd.map((d) => (
+                      <option key={d} value={d}>
+                        {days[d]}요일
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    onClick={() => {
+                      const target = availableToAdd.includes(Number(addWeekday)) ? Number(addWeekday) : availableToAdd[0];
+                      enableWeekday(target);
+                      const next = availableToAdd.filter((d) => d !== target);
+                      if (next.length) setAddWeekday(String(next[0]));
+                    }}
+                    variant="secondary"
+                    className="rounded-lg"
+                  >
+                    추가
+                  </Button>
+                </div>
+              )}
+
+              {enabledWeekdays.map((dayNum) => (
+                <BaseScheduleEditor key={dayNum} dayNum={dayNum} />
+              ))}
+
               <Button onClick={saveNow} className="w-full rounded-xl">
                 <Save size={16} className="mr-1" />기본 일정 저장
               </Button>
               <div className="rounded-2xl bg-amber-50 p-3 text-sm">
                 <p className="font-semibold text-amber-800">이번 달 배정 → 기본 일정으로 저장</p>
                 <p className="mt-1 text-xs text-amber-700">
-                  캘린더에서 직접 바꾼 이번 달 토·일 정규 수업 배정을 기본 일정으로 덮어씁니다. (각 요일 첫 주 기준)
+                  캘린더에서 직접 바꾼 이번 달 정규 수업 배정을 요일별 기본 일정으로 덮어씁니다. (각 요일 첫 등장 주 기준)
                 </p>
                 <Button
                   onClick={() => {
@@ -1103,80 +1243,6 @@ export default function Page() {
                 >
                   이번 달 정규 → 기본 일정으로 저장
                 </Button>
-              </div>
-            </div>
-          )}
-
-          {rightTab === "vacation" && (
-            <div className="space-y-4">
-              <div>
-                <h2 className="flex items-center gap-2 text-xl font-semibold">
-                  <CalendarDays size={20} /> 방학 정규 수업
-                </h2>
-                <p className="mt-1 text-sm text-slate-500">개강일~종강일 사이의 지정 요일마다 반복 추가됩니다.</p>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="space-y-1 text-sm">
-                  개강 날짜
-                  <input className="w-full rounded-xl border p-2" type="date" value={vacationForm.startDate} onChange={(e) => setVacationForm({ ...vacationForm, startDate: e.target.value })} />
-                </label>
-                <label className="space-y-1 text-sm">
-                  종강 날짜
-                  <input className="w-full rounded-xl border p-2" type="date" value={vacationForm.endDate} onChange={(e) => setVacationForm({ ...vacationForm, endDate: e.target.value })} />
-                </label>
-              </div>
-              <label className="block space-y-1 text-sm">
-                요일
-                <select className="w-full rounded-xl border p-2" value={vacationForm.weekday} onChange={(e) => setVacationForm({ ...vacationForm, weekday: e.target.value })}>
-                  {days.map((day, index) => (
-                    <option key={day} value={index}>
-                      {day}요일
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <TextInput className="w-full rounded-xl border p-2" value={vacationForm.title} onCommit={(value) => setVacationForm({ ...vacationForm, title: value })} placeholder="수업명 예: 34기 방학특강" />
-              <div className="grid grid-cols-2 gap-2">
-                <input className="rounded-xl border p-2" type="time" value={vacationForm.start} onChange={(e) => setVacationForm({ ...vacationForm, start: e.target.value })} />
-                <input className="rounded-xl border p-2" type="time" value={vacationForm.end} onChange={(e) => setVacationForm({ ...vacationForm, end: e.target.value })} />
-              </div>
-              <div className="space-y-2">
-                {vacationForm.assistants.map((name, index) => (
-                  <AssistantSlot
-                    key={index}
-                    value={name}
-                    assistants={assistants}
-                    onChange={(value) => {
-                      const next = [...vacationForm.assistants];
-                      next[index] = value;
-                      setVacationForm({ ...vacationForm, assistants: next });
-                    }}
-                    onRemove={() => {
-                      const next = vacationForm.assistants.filter((_, i) => i !== index);
-                      setVacationForm({ ...vacationForm, assistants: next.length ? next : [NO_PERSON] });
-                    }}
-                  />
-                ))}
-                <button onClick={() => setVacationForm({ ...vacationForm, assistants: [...vacationForm.assistants, NO_PERSON] })} className="rounded-lg bg-slate-100 px-3 py-2 text-sm">
-                  + 조교 칸 추가
-                </button>
-              </div>
-              <Button onClick={addVacationSchedule} className="w-full rounded-xl">
-                방학 정규 등록
-              </Button>
-              <div className="space-y-2">
-                {vacationSchedules.map((schedule) => (
-                  <div key={schedule.id} className="rounded-2xl bg-emerald-50 p-3 text-sm">
-                    <div className="font-bold">{schedule.title}</div>
-                    <div>
-                      {schedule.startDate}~{schedule.endDate} · {days[Number(schedule.weekday)]}요일 · {schedule.start}~{schedule.end}
-                    </div>
-                    <div className="text-slate-600">{schedule.assistants.join(" · ")}</div>
-                    <button onClick={() => deleteVacationSchedule(schedule.id)} className="mt-2 rounded-lg bg-red-50 px-2 py-1 text-xs text-red-600">
-                      삭제
-                    </button>
-                  </div>
-                ))}
               </div>
             </div>
           )}
@@ -1214,6 +1280,49 @@ export default function Page() {
                 </div>
               ))}
             <p className="text-xs text-slate-500">조교는 본인 이름 + 이 비밀번호로 조교 화면에 입장합니다.</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-3xl border-none shadow-sm">
+        <CardContent className="space-y-4 p-5">
+          <h2 className="text-xl font-semibold">조교별 출근 횟수</h2>
+          <div className="space-y-3">
+            {assistants
+              .filter((n) => n !== NO_PERSON)
+              .map((name) => {
+                const s = assistantMonthlyStats[name] || { total: 0, byClass: {} };
+                const entries = Object.entries(s.byClass).sort((a, b) => {
+                  const ai = classNames.indexOf(a[0]);
+                  const bi = classNames.indexOf(b[0]);
+                  if (ai === -1 && bi === -1) return a[0].localeCompare(b[0]);
+                  if (ai === -1) return 1;
+                  if (bi === -1) return -1;
+                  return ai - bi;
+                });
+                return (
+                  <div key={name} className="rounded-2xl bg-slate-100 p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className="font-bold">{name}</p>
+                      <p className="text-sm text-slate-600">
+                        이번 달 <b className="text-slate-900">{s.total}회</b>
+                      </p>
+                    </div>
+                    <div className="space-y-1 text-sm">
+                      {entries.length ? (
+                        entries.map(([className, count]) => (
+                          <div key={className} className="flex justify-between rounded-xl bg-white px-3 py-1">
+                            <span>{className}</span>
+                            <b>{count}회</b>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-xs text-slate-500">배정된 수업이 없습니다.</p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
           </div>
         </CardContent>
       </Card>
