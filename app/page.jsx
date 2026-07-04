@@ -79,6 +79,21 @@ function normalizeBaseSchedule(input) {
 
 const assistantSeed = ["강지후", "송은호", "정율제", "이찬영", NO_PERSON];
 
+// 월화수목금토일 순 정렬용 (월=0 → 일=6)
+const weekdaySortKey = (d) => (d === 0 ? 6 : d - 1);
+const sortWeekdays = (arr) => [...arr].sort((a, b) => weekdaySortKey(a) - weekdaySortKey(b));
+
+// 요일별 편집 카드 배경색
+const weekdayTone = (dayNum) => {
+  switch (dayNum) {
+    case 6: return "bg-rose-50"; // 토 빨강
+    case 0: return "bg-blue-50"; // 일 파랑
+    case 1: return "bg-amber-50"; // 월 노랑
+    case 2: return "bg-emerald-50"; // 화 초록
+    default: return "bg-fuchsia-50"; // 수·목·금 보라 (추가 수업 계열)
+  }
+};
+
 const assistantPasswordSeed = {
   강지후: "0000",
   송은호: "0000",
@@ -228,7 +243,7 @@ export default function Page() {
   const [enabledWeekdays, setEnabledWeekdays] = useState(() => {
     const s = new Set([0, 6]);
     for (let d = 1; d <= 5; d++) if ((defaultBaseSchedule[d] || []).length > 0) s.add(d);
-    return [...s].sort();
+    return sortWeekdays([...s]);
   });
   const [lessons, setLessons] = useState(() =>
     generateMonthLessons(today.getFullYear(), today.getMonth() + 1, defaultBaseSchedule)
@@ -276,9 +291,9 @@ export default function Page() {
       const s = new Set([0, 6]);
       for (let d = 0; d <= 6; d++) if ((normalized[d] || []).length > 0) s.add(d);
       if (Array.isArray(data.enabledWeekdays)) data.enabledWeekdays.forEach((d) => s.add(Number(d)));
-      setEnabledWeekdays([...s].sort());
+      setEnabledWeekdays(sortWeekdays([...s]));
     } else if (Array.isArray(data.enabledWeekdays)) {
-      setEnabledWeekdays([...new Set(data.enabledWeekdays.map(Number))].sort());
+      setEnabledWeekdays(sortWeekdays([...new Set(data.enabledWeekdays.map(Number))]));
     }
     if (data.lessons) setLessons(data.lessons);
     if (data.viewMode) setViewMode(data.viewMode);
@@ -713,7 +728,7 @@ export default function Page() {
     if (Number.isNaN(n) || n < 0 || n > 6) return;
     if (enabledWeekdays.includes(n)) return;
     pushUndo(`${days[n]}요일 편집칸 추가`);
-    setEnabledWeekdays([...enabledWeekdays, n].sort((a, b) => a - b));
+    setEnabledWeekdays(sortWeekdays([...enabledWeekdays, n]));
   };
 
   const disableWeekday = (dayNum) => {
@@ -769,7 +784,7 @@ export default function Page() {
     setBaseSchedule(nextBase);
     const s = new Set(enabledWeekdays);
     for (let d = 0; d <= 6; d++) if ((nextBase[d] || []).length > 0) s.add(d);
-    setEnabledWeekdays([...s].sort((a, b) => a - b));
+    setEnabledWeekdays(sortWeekdays([...s]));
     setSaveStatus("현재 달 정규 수업을 기본 일정으로 저장함");
   };
 
@@ -820,29 +835,29 @@ export default function Page() {
     const requested = lesson.swapRequests.includes(currentAssistant);
     const mobile = deviceMode === "mobile";
 
-    // 캘린더 셀 안: 관리자 아닌 화면(전체/조교)에서는 초압축 렌더로 세로 길이 최소화
+    // 캘린더 셀 안: 관리자 아닌 화면(전체/조교)에서는 압축 렌더로 세로 길이 최소화하되 가독성 유지
     if (calendarView && !isAdmin) {
       return (
-        <div className={`rounded-lg ${bg} p-1.5 text-[11px] leading-tight`}>
+        <div className={`rounded-lg ${bg} p-2 text-xs leading-snug`}>
           <div className="flex items-baseline justify-between gap-1">
             <span className="truncate font-bold">{lesson.title}</span>
             {lesson.type === "extra" && (
-              <span className="shrink-0 rounded-full bg-white/80 px-1.5 text-[9px] text-slate-600">추가</span>
+              <span className="shrink-0 rounded-full bg-white/80 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">추가</span>
             )}
           </div>
-          <div className="text-[10px] text-slate-500">
+          <div className="text-[11px] text-slate-500">
             {lesson.start}~{lesson.end}
           </div>
-          <div className="mt-0.5 flex flex-wrap gap-0.5">
+          <div className="mt-1 flex flex-wrap gap-1">
             {sortAssistantsForDisplay(lesson.assistants)
               .filter((n) => n !== NO_PERSON)
               .map((name, i) => (
                 <span
                   key={`${name}-${i}`}
-                  className={`rounded px-1 text-[10px] ${
+                  className={`rounded-md px-1.5 py-0.5 text-[11px] ${
                     lesson.substituteAssistants?.includes(name)
                       ? "bg-orange-200 font-bold text-orange-900"
-                      : "bg-white/80"
+                      : "bg-white/90 text-slate-700"
                   }`}
                 >
                   {name}
@@ -850,10 +865,10 @@ export default function Page() {
               ))}
           </div>
           {(lesson.swapHistory || []).length > 0 && (
-            <div className="mt-0.5 text-[9px] font-bold leading-tight text-orange-800">
+            <div className="mt-1 space-y-0.5 text-[11px] font-semibold text-orange-800">
               {lesson.swapHistory.map((h, i) => (
                 <div key={i}>
-                  {h.from}→{h.to}
+                  {h.from} → {h.to}
                 </div>
               ))}
             </div>
@@ -861,11 +876,11 @@ export default function Page() {
           {role === "assistant" && (
             <button
               onClick={() => (requested ? cancelSwapRequest(lesson.id) : requestSwap(lesson.id))}
-              className={`mt-1 h-5 w-full rounded text-[10px] font-semibold ${
-                requested ? "bg-slate-200 text-slate-700" : "bg-slate-800 text-white"
+              className={`mt-1.5 h-7 w-full rounded-md text-[11px] font-semibold ${
+                requested ? "bg-slate-200 text-slate-700" : "bg-slate-800 text-white hover:bg-slate-700"
               }`}
             >
-              {requested ? "대타 취소" : "대타 요청"}
+              {requested ? "대타 요청 취소" : "대타 요청"}
             </button>
           )}
         </div>
@@ -1000,8 +1015,7 @@ export default function Page() {
 
   const BaseScheduleEditor = ({ dayNum }) => {
     const label = `${days[dayNum]}요일 기본`;
-    const tone =
-      dayNum === 6 ? "bg-rose-50" : dayNum === 0 ? "bg-blue-50" : "bg-slate-100";
+    const tone = weekdayTone(dayNum);
     const removable = dayNum !== 0 && dayNum !== 6;
     return (
       <div className={`rounded-2xl p-3 ${tone}`}>
@@ -1105,12 +1119,12 @@ export default function Page() {
                   const isSun = d.getDay() === 0;
                   const bg = !inMonth ? "bg-slate-50 text-slate-300" : isSat ? "bg-rose-50" : isSun ? "bg-blue-50" : "bg-white";
                   return (
-                    <div key={key} className={`border text-left ${bg} ${mobile ? "min-h-[110px] p-1.5" : isAdmin ? "min-h-[180px] p-2" : "min-h-[110px] p-1.5"}`}>
-                      <div className="mb-1 flex justify-between">
+                    <div key={key} className={`border text-left ${bg} ${mobile ? "min-h-[120px] p-2" : isAdmin ? "min-h-[180px] p-2" : "min-h-[130px] p-2"}`}>
+                      <div className="mb-1.5 flex justify-between">
                         <span className="font-bold">{d.getDate()}</span>
-                        {inMonth && (isSat || isSun) && <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-slate-500">정규</span>}
+                        {inMonth && (isSat || isSun) && <span className="rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-500">정규</span>}
                       </div>
-                      <div className="space-y-1">
+                      <div className="space-y-1.5">
                         {(lessonsByDate[key] || []).map((lesson) => (
                           <LessonCard key={lesson.id} lesson={lesson} calendarView />
                         ))}
