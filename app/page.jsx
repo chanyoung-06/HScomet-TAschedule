@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import { createClient } from "@supabase/supabase-js";
 
 const STORAGE_KEY = "hscomet-ta-schedule-v2";
-const ADMIN_PASSWORD = "hscomet101";
+const ADMIN_PASSWORD = "hscomet102";
 const SUPABASE_STATE_ID = "main";
 const SUPABASE_URL_FALLBACK = "https://msdikmalqkhmkwqzbpkm.supabase.co";
 const SUPABASE_ANON_KEY_FALLBACK = "sb_publishable_TmBNhYVTTgcsaeGavMkgeQ_QbIAmlTM";
@@ -95,13 +95,13 @@ const weekdayTone = (dayNum) => {
 };
 
 const assistantPasswordSeed = {
-  강지후: "0000",
-  송은호: "0000",
-  정율제: "0000",
-  이찬영: "0000",
+  강지후: "hscomet102",
+  송은호: "hscomet102",
+  정율제: "hscomet102",
+  이찬영: "hscomet102",
 };
 
-const DEFAULT_ASSISTANT_PASSWORD = "0000";
+const DEFAULT_ASSISTANT_PASSWORD = "hscomet102";
 
 function pad(n) {
   return String(n).padStart(2, "0");
