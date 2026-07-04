@@ -511,8 +511,17 @@ export default function Page() {
   }, [lessons, assistants, year, month]);
 
   const loadMonth = () => {
-    pushUndo("기본 일정 생성");
     const monthPrefix = `${year}-${pad(month)}-`;
+    const existingRegular = lessons.filter((l) => l.date.startsWith(monthPrefix) && l.type === "regular");
+    if (existingRegular.length > 0) {
+      if (
+        !window.confirm(
+          `${year}년 ${month}월의 정규 수업을 기본 일정대로 다시 생성할까요?\n기존 정규 배정 ${existingRegular.length}개가 초기화됩니다. (추가 수업은 유지)`
+        )
+      )
+        return;
+    }
+    pushUndo("기본 일정 생성");
     const newMonthLessons = generateMonthLessons(year, month, baseSchedule);
 
     setLessons((prev) => {
@@ -829,6 +838,70 @@ export default function Page() {
     setLessons((prev) => prev.filter((lesson) => lesson.id !== id));
   };
 
+  // ── 내보내기 유틸리티 ────────────────────────────────────────────────
+  const downloadCsv = (filename, rows) => {
+    const csv = rows
+      .map((r) =>
+        r
+          .map((cell) => {
+            const s = String(cell ?? "");
+            return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+          })
+          .join(",")
+      )
+      .join("\n");
+    // BOM을 붙여야 엑셀 한글이 안 깨짐
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const exportScheduleCsv = () => {
+    const monthPrefix = `${year}-${pad(month)}-`;
+    const rows = [["날짜", "요일", "시작", "종료", "수업명", "조교", "구분", "대타내역"]];
+    lessons
+      .filter((l) => l.date.startsWith(monthPrefix))
+      .sort((a, b) => `${a.date} ${a.start}`.localeCompare(`${b.date} ${b.start}`))
+      .forEach((l) => {
+        const dow = days[new Date(`${l.date}T00:00:00`).getDay()];
+        const names = l.assistants.filter((n) => n !== NO_PERSON).join(" · ") || "-";
+        const swap = (l.swapHistory || []).map((h) => `${h.from}→${h.to}`).join(" / ");
+        rows.push([l.date, dow, l.start, l.end, l.title, names, l.type === "extra" ? "추가" : "정규", swap]);
+      });
+    downloadCsv(`혜성코멧_${year}년${month}월_출근표.csv`, rows);
+  };
+
+  const exportAssistantSummaryCsv = () => {
+    const classSet = new Set();
+    Object.values(assistantMonthlyStats).forEach((s) => Object.keys(s.byClass).forEach((c) => classSet.add(c)));
+    const classList = [...classSet].sort((a, b) => {
+      const ai = classNames.indexOf(a);
+      const bi = classNames.indexOf(b);
+      if (ai === -1 && bi === -1) return a.localeCompare(b);
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+    const rows = [["조교", "총합", ...classList]];
+    assistants
+      .filter((n) => n !== NO_PERSON)
+      .forEach((name) => {
+        const s = assistantMonthlyStats[name] || { total: 0, byClass: {} };
+        rows.push([name, s.total, ...classList.map((c) => s.byClass[c] || 0)]);
+      });
+    downloadCsv(`혜성코멧_${year}년${month}월_조교별출근.csv`, rows);
+  };
+
+  const printSchedule = () => {
+    if (typeof window !== "undefined") window.print();
+  };
+
   const LessonCard = ({ lesson, compact = false, calendarView = false }) => {
     const isSat = new Date(`${lesson.date}T00:00:00`).getDay() === 6;
     const bg = lesson.type === "extra" ? "bg-fuchsia-100" : isSat ? "bg-rose-100" : "bg-blue-100";
@@ -1079,7 +1152,7 @@ export default function Page() {
             <h2 className="flex items-center gap-2 text-xl font-semibold">
               <ClipboardList size={20} /> {year}년 {month}월 {isAllView ? "전체 일정" : isAdmin ? "출근표" : `${currentAssistant} 일정`}
             </h2>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 print:hidden">
               <div className="rounded-xl bg-slate-100 p-1">
                 <button onClick={() => setViewMode("calendar")} className={`rounded-lg px-3 py-2 text-sm ${viewMode === "calendar" ? "bg-white shadow-sm" : ""}`}>
                   <CalendarDays size={15} className="mr-1 inline" />캘린더형
@@ -1149,7 +1222,7 @@ export default function Page() {
   const availableToAdd = [1, 2, 3, 4, 5].filter((d) => !enabledWeekdays.includes(d));
 
   const AdminPanel = () => (
-    <aside className="space-y-6">
+    <aside className="space-y-6 print:hidden">
       <Card className="rounded-3xl border-none shadow-sm">
         <CardContent className="space-y-4 p-5">
           <div className="rounded-xl bg-slate-100 p-1">
@@ -1298,6 +1371,27 @@ export default function Page() {
         </CardContent>
       </Card>
 
+      <Card className="rounded-3xl border-none shadow-sm print:hidden">
+        <CardContent className="space-y-3 p-5">
+          <h2 className="text-xl font-semibold">내보내기</h2>
+          <p className="text-xs text-slate-500">이번 달({year}년 {month}월) 데이터를 다운로드하거나 인쇄합니다.</p>
+          <div className="space-y-2">
+            <Button onClick={exportScheduleCsv} variant="secondary" className="w-full rounded-xl">
+              CSV: 월간 출근표 (엑셀 열기)
+            </Button>
+            <Button onClick={exportAssistantSummaryCsv} variant="secondary" className="w-full rounded-xl">
+              CSV: 조교별 출근 요약
+            </Button>
+            <Button onClick={printSchedule} className="w-full rounded-xl">
+              인쇄 / PDF 저장
+            </Button>
+          </div>
+          <p className="text-[11px] text-slate-500">
+            인쇄 창에서 ‘PDF로 저장’을 선택하면 카톡 공유용 파일이 생성됩니다. 캘린더는 가로 방향(landscape)이 잘 맞습니다.
+          </p>
+        </CardContent>
+      </Card>
+
       <Card className="rounded-3xl border-none shadow-sm">
         <CardContent className="space-y-4 p-5">
           <h2 className="text-xl font-semibold">조교별 출근 횟수</h2>
@@ -1410,8 +1504,17 @@ export default function Page() {
 
   return (
     <main className="min-h-screen bg-slate-50 p-4 text-slate-900 md:p-6">
+      <style>{`
+        @media print {
+          @page { size: A4 landscape; margin: 10mm; }
+          html, body { background: white !important; }
+          .print-hide { display: none !important; }
+          main { padding: 0 !important; }
+          .print-shadow-off { box-shadow: none !important; border: 1px solid #e5e7eb !important; }
+        }
+      `}</style>
       <div className="mx-auto max-w-7xl space-y-6">
-        <motion.header initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="rounded-3xl bg-white p-6 shadow-sm">
+        <motion.header initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="rounded-3xl bg-white p-6 shadow-sm print:hidden">
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>
               <p className="mb-2 inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-600">
