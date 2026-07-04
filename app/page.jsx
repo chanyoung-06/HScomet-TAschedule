@@ -510,6 +510,75 @@ export default function Page() {
     return result;
   }, [lessons, assistants, year, month]);
 
+  // 조교 화면용 정산 내역 텍스트 (정규 / 추가·직보 분리)
+  const settlementText = useMemo(() => {
+    const monthPrefix = `${year}-${pad(month)}-`;
+    const shorten = (title) => title.replace(/^(한성|세종)\s+/, "");
+    const orderMap = new Map(classNames.map((c, i) => [shorten(c), i]));
+    const regular = {};
+    const extra = {};
+    lessons
+      .filter((l) => l.date.startsWith(monthPrefix) && l.assistants.includes(currentAssistant))
+      .forEach((l) => {
+        const bucket = l.type === "extra" ? extra : regular;
+        const key = shorten(l.title);
+        bucket[key] = (bucket[key] || 0) + 1;
+      });
+
+    const lines = [];
+    const regEntries = Object.entries(regular);
+    if (regEntries.length) {
+      lines.push("*정규수업");
+      let total = 0;
+      regEntries
+        .sort((a, b) => {
+          const ai = orderMap.has(a[0]) ? orderMap.get(a[0]) : 999;
+          const bi = orderMap.has(b[0]) ? orderMap.get(b[0]) : 999;
+          if (ai !== bi) return ai - bi;
+          return a[0].localeCompare(b[0]);
+        })
+        .forEach(([name, count]) => {
+          lines.push(`${name}- ${count}회`);
+          total += count;
+        });
+      lines.push(`총 ${total}회`);
+    }
+    const extEntries = Object.entries(extra);
+    if (extEntries.length) {
+      if (lines.length) lines.push("");
+      lines.push("*추가&직보수업");
+      let total = 0;
+      extEntries
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .forEach(([name, count]) => {
+          lines.push(`${name}- ${count}회`);
+          total += count;
+        });
+      lines.push(`총 ${total}회`);
+    }
+    return lines.join("\n");
+  }, [lessons, currentAssistant, year, month]);
+
+  const copySettlement = async () => {
+    if (!settlementText) return;
+    try {
+      await navigator.clipboard.writeText(settlementText);
+      setSaveStatus("정산 내역 복사됨 ✓");
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = settlementText;
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand("copy");
+        setSaveStatus("정산 내역 복사됨 ✓");
+      } catch {
+        window.alert("복사에 실패했습니다. 텍스트를 직접 선택해서 복사해 주세요.");
+      }
+      document.body.removeChild(ta);
+    }
+  };
+
   const loadMonth = () => {
     const monthPrefix = `${year}-${pad(month)}-`;
     const existingRegular = lessons.filter((l) => l.date.startsWith(monthPrefix) && l.type === "regular");
@@ -899,7 +968,20 @@ export default function Page() {
   };
 
   const printSchedule = () => {
-    if (typeof window !== "undefined") window.print();
+    if (typeof window === "undefined") return;
+    // 인쇄는 항상 전체 일정 + 캘린더 모드로 (편집 UI 대신 컴팩트 카드가 인쇄됨)
+    const prevMode = viewMode;
+    const prevRole = role;
+    const prevSelected = selectedAssistant;
+    if (viewMode !== "calendar") setViewMode("calendar");
+    if (role !== "all") setRole("all");
+    if (selectedAssistant !== "전체") setSelectedAssistant("전체");
+    window.setTimeout(() => {
+      window.print();
+      if (prevMode !== "calendar") setViewMode(prevMode);
+      if (prevRole !== "all") setRole(prevRole);
+      if (prevSelected !== "전체") setSelectedAssistant(prevSelected);
+    }, 150);
   };
 
   const LessonCard = ({ lesson, compact = false, calendarView = false }) => {
@@ -911,23 +993,23 @@ export default function Page() {
     // 캘린더 셀 안: 관리자 아닌 화면(전체/조교)에서는 압축 렌더로 세로 길이 최소화하되 가독성 유지
     if (calendarView && !isAdmin) {
       return (
-        <div className={`rounded-lg ${bg} p-2 text-xs leading-snug`}>
+        <div className={`cal-lesson rounded-lg ${bg} p-2 text-xs leading-snug`}>
           <div className="flex items-baseline justify-between gap-1">
             <span className="truncate font-bold">{lesson.title}</span>
             {lesson.type === "extra" && (
-              <span className="shrink-0 rounded-full bg-white/80 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">추가</span>
+              <span className="cal-lesson-pill shrink-0 rounded-full bg-white/80 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">추가</span>
             )}
           </div>
-          <div className="text-[11px] text-slate-500">
+          <div className="cal-lesson-time text-[11px] text-slate-500">
             {lesson.start}~{lesson.end}
           </div>
-          <div className="mt-1 flex flex-wrap gap-1">
+          <div className="cal-lesson-pills mt-1 flex flex-wrap gap-1">
             {sortAssistantsForDisplay(lesson.assistants)
               .filter((n) => n !== NO_PERSON)
               .map((name, i) => (
                 <span
                   key={`${name}-${i}`}
-                  className={`rounded-md px-1.5 py-0.5 text-[11px] ${
+                  className={`cal-lesson-pill rounded-md px-1.5 py-0.5 text-[11px] ${
                     lesson.substituteAssistants?.includes(name)
                       ? "bg-orange-200 font-bold text-orange-900"
                       : "bg-white/90 text-slate-700"
@@ -938,7 +1020,7 @@ export default function Page() {
               ))}
           </div>
           {(lesson.swapHistory || []).length > 0 && (
-            <div className="mt-1 space-y-0.5 text-[11px] font-semibold text-orange-800">
+            <div className="cal-lesson-history mt-1 space-y-0.5 text-[11px] font-semibold text-orange-800">
               {lesson.swapHistory.map((h, i) => (
                 <div key={i}>
                   {h.from} → {h.to}
@@ -949,7 +1031,7 @@ export default function Page() {
           {role === "assistant" && (
             <button
               onClick={() => (requested ? cancelSwapRequest(lesson.id) : requestSwap(lesson.id))}
-              className={`mt-1.5 h-7 w-full rounded-md text-[11px] font-semibold ${
+              className={`cal-lesson-swap-btn mt-1.5 h-7 w-full rounded-md text-[11px] font-semibold ${
                 requested ? "bg-slate-200 text-slate-700" : "bg-slate-800 text-white hover:bg-slate-700"
               }`}
             >
@@ -1192,12 +1274,12 @@ export default function Page() {
                   const isSun = d.getDay() === 0;
                   const bg = !inMonth ? "bg-slate-50 text-slate-300" : isSat ? "bg-rose-50" : isSun ? "bg-blue-50" : "bg-white";
                   return (
-                    <div key={key} className={`border text-left ${bg} ${mobile ? "min-h-[120px] p-2" : isAdmin ? "min-h-[180px] p-2" : "min-h-[130px] p-2"}`}>
-                      <div className="mb-1.5 flex justify-between">
+                    <div key={key} className={`cal-cell border text-left ${bg} ${mobile ? "min-h-[120px] p-2" : isAdmin ? "min-h-[180px] p-2" : "min-h-[130px] p-2"}`}>
+                      <div className="cal-date mb-1.5 flex justify-between">
                         <span className="font-bold">{d.getDate()}</span>
-                        {inMonth && (isSat || isSun) && <span className="rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-500">정규</span>}
+                        {inMonth && (isSat || isSun) && <span className="cal-badge rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-500">정규</span>}
                       </div>
-                      <div className="space-y-1.5">
+                      <div className="cal-lesson-stack space-y-1.5">
                         {(lessonsByDate[key] || []).map((lesson) => (
                           <LessonCard key={lesson.id} lesson={lesson} calendarView />
                         ))}
@@ -1498,6 +1580,22 @@ export default function Page() {
             )}
           </div>
         </div>
+        {settlementText && (
+          <div className="rounded-2xl bg-slate-100 p-4">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-sm font-semibold">정산 내역</p>
+              <button
+                onClick={copySettlement}
+                className="rounded-lg bg-white px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                복사
+              </button>
+            </div>
+            <pre className="whitespace-pre-wrap break-words rounded-xl bg-white p-3 font-mono text-xs leading-relaxed text-slate-800">
+{settlementText}
+            </pre>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -1506,10 +1604,22 @@ export default function Page() {
     <main className="min-h-screen bg-slate-50 p-4 text-slate-900 md:p-6">
       <style>{`
         @media print {
-          @page { size: A4 landscape; margin: 10mm; }
+          @page { size: A4 landscape; margin: 6mm; }
           html, body { background: white !important; }
           .print-hide { display: none !important; }
           main { padding: 0 !important; }
+          h1, h2 { font-size: 12pt !important; }
+          /* 캘린더 셀 컴팩트 */
+          .cal-cell { min-height: 0 !important; padding: 3px !important; }
+          .cal-date { font-size: 8pt !important; margin-bottom: 1px !important; }
+          .cal-badge { display: none !important; }
+          .cal-lesson-stack { gap: 2px !important; }
+          .cal-lesson { padding: 2px 3px !important; font-size: 7pt !important; line-height: 1.2 !important; border-radius: 4px !important; }
+          .cal-lesson-time { font-size: 6.5pt !important; }
+          .cal-lesson-pills { gap: 2px !important; margin-top: 1px !important; }
+          .cal-lesson-pill { padding: 0 3px !important; font-size: 6.5pt !important; border-radius: 3px !important; }
+          .cal-lesson-swap-btn { display: none !important; }
+          .cal-lesson-history { font-size: 6.5pt !important; margin-top: 1px !important; }
           .print-shadow-off { box-shadow: none !important; border: 1px solid #e5e7eb !important; }
         }
       `}</style>
