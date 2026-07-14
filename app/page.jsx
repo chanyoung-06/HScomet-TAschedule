@@ -94,6 +94,17 @@ const weekdayTone = (dayNum) => {
   }
 };
 
+// 요일별 수업 카드 배경색 (조금 더 진한 -100 톤)
+const weekdayCardTone = (dayNum) => {
+  switch (dayNum) {
+    case 6: return "bg-rose-100";
+    case 0: return "bg-blue-100";
+    case 1: return "bg-amber-100";
+    case 2: return "bg-emerald-100";
+    default: return "bg-fuchsia-100";
+  }
+};
+
 const assistantPasswordSeed = {
   강지후: "hscomet102",
   송은호: "hscomet102",
@@ -140,7 +151,7 @@ function sortAssistantsForDisplay(list) {
   });
 }
 
-function makeLesson({ date, title, start, end, assistants, type, id }) {
+function makeLesson({ date, title, start, end, assistants, type, id, manuallyAdded }) {
   return {
     id: id || `${type}-${date}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     date,
@@ -149,6 +160,7 @@ function makeLesson({ date, title, start, end, assistants, type, id }) {
     end,
     assistants: cleanAssistants(assistants),
     type,
+    manuallyAdded: !!manuallyAdded,
     swap: false,
     swapRequests: [],
     swapHistory: [],
@@ -266,10 +278,15 @@ export default function Page() {
   const [exporting, setExporting] = useState(false);
   const [extra, setExtra] = useState({
     date: dateKey(today),
+    startDate: dateKey(today),
+    endDate: dateKey(today),
+    weekdays: [today.getDay()],
+    dateMode: "single",
     title: "추가 수업",
     start: "10:00",
     end: "13:00",
     assistants: [NO_PERSON, NO_PERSON],
+    type: "extra",
   });
   const [undoStack, setUndoStack] = useState([]);
   const remoteUpdateRef = useRef(false);
@@ -588,30 +605,53 @@ export default function Page() {
     }
   };
 
-  // 날짜별 출근 내역 (정규 수업만, 반 숫자만 추림)
+  // 날짜별 출근 내역 (정규 + 추가/직보 각각 섹션)
   const dailyText = useMemo(() => {
     const monthPrefix = `${year}-${pad(month)}-`;
     const shortNum = (title) => title.replace(/^(한성|세종)\s+/, "").replace(/기$/, "").trim();
-    const byDate = {};
+    const shortExtra = (title) => title.replace(/^(한성|세종)\s+/, "").trim();
+    const regByDate = {};
+    const extByDate = {};
     lessons
-      .filter((l) => l.date.startsWith(monthPrefix) && l.type === "regular" && l.assistants.includes(currentAssistant))
+      .filter((l) => l.date.startsWith(monthPrefix) && l.assistants.includes(currentAssistant))
       .forEach((l) => {
-        (byDate[l.date] ||= new Set()).add(shortNum(l.title));
+        if (l.type === "regular") {
+          (regByDate[l.date] ||= new Set()).add(shortNum(l.title));
+        } else if (l.type === "extra") {
+          (extByDate[l.date] ||= new Set()).add(shortExtra(l.title));
+        }
       });
-    const dates = Object.keys(byDate).sort();
-    if (!dates.length) return "";
-    const lines = ["<정규수업>"];
-    dates.forEach((date) => {
-      const d = new Date(`${date}T00:00:00`);
-      const md = `${d.getMonth() + 1}/${d.getDate()}(${days[d.getDay()]})`;
-      const sorted = [...byDate[date]].sort((a, b) => {
-        const na = parseInt(a, 10);
-        const nb = parseInt(b, 10);
-        if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
-        return a.localeCompare(b);
+
+    const lines = [];
+
+    const regDates = Object.keys(regByDate).sort();
+    if (regDates.length) {
+      lines.push("<정규수업>");
+      regDates.forEach((date) => {
+        const d = new Date(`${date}T00:00:00`);
+        const md = `${d.getMonth() + 1}/${d.getDate()}(${days[d.getDay()]})`;
+        const sorted = [...regByDate[date]].sort((a, b) => {
+          const na = parseInt(a, 10);
+          const nb = parseInt(b, 10);
+          if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
+          return a.localeCompare(b);
+        });
+        lines.push(`${md} ${sorted.join(",")}`);
       });
-      lines.push(`${md} ${sorted.join(",")}`);
-    });
+    }
+
+    const extDates = Object.keys(extByDate).sort();
+    if (extDates.length) {
+      if (lines.length) lines.push("");
+      lines.push("<추가&직보수업>");
+      extDates.forEach((date) => {
+        const d = new Date(`${date}T00:00:00`);
+        const md = `${d.getMonth() + 1}/${d.getDate()}(${days[d.getDay()]})`;
+        const names = [...extByDate[date]].sort((a, b) => a.localeCompare(b));
+        lines.push(`${md} ${names.join(", ")}`);
+      });
+    }
+
     return lines.join("\n");
   }, [lessons, currentAssistant, year, month]);
 
@@ -657,8 +697,11 @@ export default function Page() {
 
     setLessons((prev) => {
       const otherMonths = prev.filter((lesson) => !lesson.date.startsWith(monthPrefix));
-      const currentMonthExtras = prev.filter((lesson) => lesson.date.startsWith(monthPrefix) && lesson.type === "extra");
-      return [...otherMonths, ...newMonthLessons, ...currentMonthExtras].sort((a, b) =>
+      const preserved = prev.filter(
+        (lesson) =>
+          lesson.date.startsWith(monthPrefix) && (lesson.type === "extra" || lesson.manuallyAdded === true)
+      );
+      return [...otherMonths, ...newMonthLessons, ...preserved].sort((a, b) =>
         `${a.date} ${a.start}`.localeCompare(`${b.date} ${b.start}`)
       );
     });
@@ -798,9 +841,61 @@ export default function Page() {
   };
 
   const addExtraLesson = () => {
-    pushUndo("추가 수업 등록");
-    setLessons((prev) => [...prev, makeLesson({ ...extra, assistants: cleanAssistants(extra.assistants), type: "extra" })]);
-    setExtra({ ...extra, title: "추가 수업", assistants: [NO_PERSON, NO_PERSON] });
+    const isReg = extra.type === "regular";
+    const targetDates = [];
+
+    if (extra.dateMode === "range") {
+      const start = new Date(`${extra.startDate}T00:00:00`);
+      const end = new Date(`${extra.endDate}T00:00:00`);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+        window.alert("날짜가 올바르지 않습니다.");
+        return;
+      }
+      if (start.getTime() > end.getTime()) {
+        window.alert("종료 날짜가 시작 날짜보다 빠릅니다.");
+        return;
+      }
+      const wds = extra.weekdays.length ? extra.weekdays : [start.getDay()];
+      const cursor = new Date(start);
+      let safety = 0;
+      while (cursor.getTime() <= end.getTime() && safety < 500) {
+        if (wds.includes(cursor.getDay())) targetDates.push(dateKey(cursor));
+        cursor.setDate(cursor.getDate() + 1);
+        safety += 1;
+      }
+      if (!targetDates.length) {
+        window.alert("선택한 요일에 해당하는 날짜가 없습니다.");
+        return;
+      }
+    } else {
+      targetDates.push(extra.date);
+    }
+
+    pushUndo(
+      isReg
+        ? `정규 수업 추가 (${targetDates.length}건)`
+        : `추가 수업 등록 (${targetDates.length}건)`
+    );
+    setLessons((prev) => [
+      ...prev,
+      ...targetDates.map((date) =>
+        makeLesson({
+          date,
+          title: extra.title,
+          start: extra.start,
+          end: extra.end,
+          assistants: cleanAssistants(extra.assistants),
+          type: isReg ? "regular" : "extra",
+          manuallyAdded: isReg,
+        })
+      ),
+    ]);
+    setExtra({
+      ...extra,
+      title: isReg ? "정규 수업" : "추가 수업",
+      assistants: [NO_PERSON, NO_PERSON],
+    });
+    setSaveStatus(`${targetDates.length}개 수업 등록됨`);
   };
 
   // 기본 일정(요일별) 편집
@@ -1076,8 +1171,9 @@ export default function Page() {
   };
 
   const LessonCard = ({ lesson, compact = false, calendarView = false }) => {
-    const isSat = new Date(`${lesson.date}T00:00:00`).getDay() === 6;
-    const bg = lesson.type === "extra" ? "bg-fuchsia-100" : isSat ? "bg-rose-100" : "bg-blue-100";
+    const dow = new Date(`${lesson.date}T00:00:00`).getDay();
+    const isSat = dow === 6;
+    const bg = lesson.type === "extra" ? "bg-fuchsia-100" : weekdayCardTone(dow);
     const requested = lesson.swapRequests.includes(currentAssistant);
     const mobile = deviceMode === "mobile";
 
@@ -1400,7 +1496,7 @@ export default function Page() {
         <CardContent className="space-y-4 p-5">
           <div className="rounded-xl bg-slate-100 p-1">
             <button onClick={() => setRightTab("extra")} className={`rounded-lg px-3 py-2 text-sm ${rightTab === "extra" ? "bg-white shadow-sm" : ""}`}>
-              <Plus size={15} className="mr-1 inline" />추가 수업
+              <Plus size={15} className="mr-1 inline" />수업 추가
             </button>
             <button onClick={() => setRightTab("base")} className={`rounded-lg px-3 py-2 text-sm ${rightTab === "base" ? "bg-white shadow-sm" : ""}`}>
               <Settings size={15} className="mr-1 inline" />기본 일정
@@ -1410,10 +1506,115 @@ export default function Page() {
           {rightTab === "extra" && (
             <div className="space-y-4">
               <h2 className="flex items-center gap-2 text-xl font-semibold">
-                <Plus size={20} /> 추가 수업 추가
+                <Plus size={20} /> 단일 수업 추가
               </h2>
-              <input className="w-full rounded-xl border p-2" type="date" value={extra.date} onChange={(e) => setExtra({ ...extra, date: e.target.value })} />
-              <TextInput className="w-full rounded-xl border p-2" value={extra.title} onCommit={(value) => setExtra({ ...extra, title: value })} placeholder="수업명 예: 34기 추가 A" />
+              <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExtra({
+                      ...extra,
+                      type: "extra",
+                      title: extra.title === "정규 수업" ? "추가 수업" : extra.title,
+                    })
+                  }
+                  className={`flex-1 rounded-lg px-3 py-2 text-sm ${extra.type === "extra" ? "bg-white shadow-sm font-semibold" : "text-slate-600"}`}
+                >
+                  추가 / 직보
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExtra({
+                      ...extra,
+                      type: "regular",
+                      title: extra.title === "추가 수업" ? "정규 수업" : extra.title,
+                    })
+                  }
+                  className={`flex-1 rounded-lg px-3 py-2 text-sm ${extra.type === "regular" ? "bg-white shadow-sm font-semibold" : "text-slate-600"}`}
+                >
+                  정규 (단일)
+                </button>
+              </div>
+              <p className="text-xs text-slate-500">
+                {extra.type === "regular"
+                  ? "특정 날짜에 정규 수업 하나만 넣습니다. 기본 일정 템플릿에는 영향 없어요."
+                  : "특강·보강·직보 등 정규 외 수업을 추가합니다."}
+              </p>
+
+              <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+                <button
+                  type="button"
+                  onClick={() => setExtra({ ...extra, dateMode: "single" })}
+                  className={`flex-1 rounded-lg px-3 py-2 text-sm ${extra.dateMode === "single" ? "bg-white shadow-sm font-semibold" : "text-slate-600"}`}
+                >
+                  단일 날짜
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const base = new Date(`${extra.date}T00:00:00`);
+                    setExtra({
+                      ...extra,
+                      dateMode: "range",
+                      startDate: extra.startDate || extra.date,
+                      endDate: extra.endDate || extra.date,
+                      weekdays: extra.weekdays && extra.weekdays.length ? extra.weekdays : [base.getDay()],
+                    });
+                  }}
+                  className={`flex-1 rounded-lg px-3 py-2 text-sm ${extra.dateMode === "range" ? "bg-white shadow-sm font-semibold" : "text-slate-600"}`}
+                >
+                  기간 반복
+                </button>
+              </div>
+
+              {extra.dateMode === "single" ? (
+                <input className="w-full rounded-xl border p-2" type="date" value={extra.date} onChange={(e) => setExtra({ ...extra, date: e.target.value })} />
+              ) : (
+                <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="space-y-1 text-xs text-slate-600">
+                      시작 날짜
+                      <input className="w-full rounded-xl border p-2 text-sm" type="date" value={extra.startDate} onChange={(e) => setExtra({ ...extra, startDate: e.target.value })} />
+                    </label>
+                    <label className="space-y-1 text-xs text-slate-600">
+                      종료 날짜
+                      <input className="w-full rounded-xl border p-2 text-sm" type="date" value={extra.endDate} onChange={(e) => setExtra({ ...extra, endDate: e.target.value })} />
+                    </label>
+                  </div>
+                  <div>
+                    <p className="mb-1 text-xs text-slate-600">반복 요일</p>
+                    <div className="flex flex-wrap gap-1">
+                      {sortWeekdays([0, 1, 2, 3, 4, 5, 6]).map((d) => {
+                        const on = extra.weekdays.includes(d);
+                        return (
+                          <button
+                            key={d}
+                            type="button"
+                            onClick={() => {
+                              const next = on ? extra.weekdays.filter((x) => x !== d) : [...extra.weekdays, d];
+                              setExtra({ ...extra, weekdays: next });
+                            }}
+                            className={`h-9 w-9 rounded-lg text-sm font-semibold transition ${
+                              on ? "bg-slate-800 text-white" : "bg-white text-slate-600 hover:bg-slate-100"
+                            }`}
+                          >
+                            {days[d]}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="mt-1 text-[11px] text-slate-500">체크한 요일마다 기간 안에서 반복 등록됩니다.</p>
+                  </div>
+                </div>
+              )}
+
+              <TextInput
+                className="w-full rounded-xl border p-2"
+                value={extra.title}
+                onCommit={(value) => setExtra({ ...extra, title: value })}
+                placeholder={extra.type === "regular" ? "수업명 예: 한성 34기" : "수업명 예: 34기 추가, 35기 직보"}
+              />
               <div className="grid grid-cols-2 gap-2">
                 <input className="rounded-xl border p-2" type="time" value={extra.start} onChange={(e) => setExtra({ ...extra, start: e.target.value })} />
                 <input className="rounded-xl border p-2" type="time" value={extra.end} onChange={(e) => setExtra({ ...extra, end: e.target.value })} />
@@ -1440,7 +1641,13 @@ export default function Page() {
                 </button>
               </div>
               <Button onClick={addExtraLesson} className="w-full rounded-xl">
-                추가 수업 등록
+                {extra.dateMode === "range"
+                  ? extra.type === "regular"
+                    ? "정규 수업 등록 (기간)"
+                    : "추가 수업 등록 (기간)"
+                  : extra.type === "regular"
+                    ? "정규 수업 등록 (단일)"
+                    : "추가 수업 등록"}
               </Button>
             </div>
           )}
