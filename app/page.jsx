@@ -1206,6 +1206,65 @@ export default function Page() {
     }
   };
 
+  // 조교별로 각각 이미지 저장 (인원 수만큼 파일 생성)
+  const exportPerAssistantImages = async () => {
+    if (typeof window === "undefined") return;
+    const targets = assistants.filter((n) => n !== NO_PERSON);
+    if (!targets.length) {
+      window.alert("조교가 없습니다.");
+      return;
+    }
+    if (!window.confirm(`${targets.length}명의 개인 일정 이미지를 각각 다운로드합니다.\n브라우저에서 여러 파일 다운로드 허용 팝업이 뜨면 ‘허용’을 눌러 주세요.\n\n계속하시겠습니까?`)) return;
+
+    setExporting(true);
+    const prevMode = viewMode;
+    const prevRole = role;
+    const prevSelected = selectedAssistant;
+    const prevDevice = deviceMode;
+    if (viewMode !== "calendar") setViewMode("calendar");
+    if (role !== "all") setRole("all");
+    if (deviceMode !== "web") setDeviceMode("web");
+
+    try {
+      const { toPng } = await import("html-to-image");
+      let success = 0;
+      for (let i = 0; i < targets.length; i++) {
+        const name = targets[i];
+        setSelectedAssistant(name);
+        setSaveStatus(`${name} 이미지 생성 중... (${i + 1}/${targets.length})`);
+        await new Promise((r) => window.setTimeout(r, 350));
+        const target = document.getElementById("schedule-capture");
+        if (!target) continue;
+        const dataUrl = await toPng(target, {
+          pixelRatio: 2,
+          backgroundColor: "#ffffff",
+          cacheBust: true,
+        });
+        const a = document.createElement("a");
+        a.href = dataUrl;
+        a.download = `혜성코멧_${year}년${month}월_${name}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        success += 1;
+        // 브라우저가 연속 다운로드를 놓치지 않도록 살짝 텀
+        await new Promise((r) => window.setTimeout(r, 600));
+      }
+      setSaveStatus(`조교별 이미지 저장 완료 ✓ (${success}/${targets.length})`);
+    } catch (e) {
+      console.error("조교별 이미지 저장 실패", e);
+      window.alert(
+        "이미지 저장에 실패했습니다.\n(에러: " + (e?.message || e) + ")\n\nhtml-to-image가 설치되어 있는지, 브라우저에서 다중 다운로드가 차단되지 않았는지 확인해 주세요."
+      );
+    } finally {
+      if (prevMode !== "calendar") setViewMode(prevMode);
+      if (prevRole !== "all") setRole(prevRole);
+      setSelectedAssistant(prevSelected);
+      if (prevDevice !== "web") setDeviceMode(prevDevice);
+      setExporting(false);
+    }
+  };
+
   const LessonCard = ({ lesson, compact = false, calendarView = false }) => {
     const dow = new Date(`${lesson.date}T00:00:00`).getDay();
     const isSat = dow === 6;
@@ -1820,11 +1879,15 @@ export default function Page() {
               CSV: 조교별 출근 요약
             </Button>
             <Button onClick={exportImage} disabled={exporting} className="w-full rounded-xl">
-              {exporting ? "이미지 생성 중..." : "PNG 이미지 저장 (캘린더)"}
+              {exporting ? "이미지 생성 중..." : "PNG 이미지 저장 (전체 캘린더)"}
+            </Button>
+            <Button onClick={exportPerAssistantImages} disabled={exporting} variant="secondary" className="w-full rounded-xl">
+              {exporting ? "이미지 생성 중..." : "PNG 이미지 저장 (조교별 각각)"}
             </Button>
           </div>
           <p className="text-[11px] text-slate-500">
-            PNG는 전체 일정 캘린더를 그대로 캡처합니다. 그대로 카카오톡·이메일에 붙여 넣을 수 있어요.
+            PNG는 전체 일정 캘린더를 그대로 캡처합니다. 그대로 카카오톡·이메일에 붙여 넣을 수 있어요.<br />
+            <span className="text-slate-400">조교별 저장 시 브라우저에서 ‘여러 파일 다운로드 허용’ 팝업이 뜨면 허용해 주세요.</span>
           </p>
         </CardContent>
       </Card>
