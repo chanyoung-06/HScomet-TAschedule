@@ -1535,7 +1535,14 @@ export default function Page() {
         <CardContent className="p-4 md:p-5">
           <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <h2 className="flex items-center gap-2 text-xl font-semibold">
-              <ClipboardList size={20} /> {year}년 {month}월 {isAllView ? "전체 일정" : isAdmin ? "출근표" : `${currentAssistant} 일정`}
+              <ClipboardList size={20} /> {year}년 {month}월{" "}
+              {(isAdmin || isAllView)
+                ? selectedAssistant !== "전체"
+                  ? `${selectedAssistant} 일정`
+                  : isAllView
+                    ? "전체 일정"
+                    : "출근표"
+                : `${currentAssistant} 일정`}
             </h2>
             <div className="flex flex-wrap gap-2 print:hidden">
               <div className="rounded-xl bg-slate-100 p-1">
