@@ -840,6 +840,42 @@ export default function Page() {
     );
   };
 
+  // 대타 내역의 대체자(to)를 다른 조교로 변경. 조교 배정과 substituteAssistants도 함께 업데이트.
+  const updateSwapReplacement = (lessonId, historyIndex, newReplacement) => {
+    pushUndo("대타 대체자 변경");
+    setLessons((prev) =>
+      prev.map((lesson) => {
+        if (lesson.id !== lessonId) return lesson;
+        const history = lesson.swapHistory || [];
+        const entry = history[historyIndex];
+        if (!entry) return lesson;
+        const oldTo = entry.to;
+        const nextTo = newReplacement || NO_PERSON;
+        if (oldTo === nextTo) return lesson;
+
+        // 조교 배정에서 oldTo 하나만 nextTo로 교체 (여러 개 있으면 첫 번째만)
+        let replaced = false;
+        const newAssistants = lesson.assistants.map((name) => {
+          if (!replaced && name === oldTo) {
+            replaced = true;
+            return nextTo;
+          }
+          return name;
+        });
+
+        // 대타 내역 업데이트
+        const newHistory = history.map((h, i) => (i === historyIndex ? { ...h, to: nextTo } : h));
+
+        // substituteAssistants 재계산: oldTo가 다른 곳에서 쓰이지 않으면 제거, nextTo가 새로 들어오면 추가
+        const oldToStillUsed = newHistory.some((h) => h.to === oldTo);
+        let subs = (lesson.substituteAssistants || []).filter((n) => (n === oldTo ? oldToStillUsed : true));
+        if (nextTo !== NO_PERSON && !subs.includes(nextTo)) subs = [...subs, nextTo];
+
+        return { ...lesson, assistants: newAssistants, swapHistory: newHistory, substituteAssistants: subs };
+      })
+    );
+  };
+
   const addExtraLesson = () => {
     const isReg = extra.type === "regular";
     const targetDates = [];
@@ -1296,14 +1332,31 @@ export default function Page() {
                   </button>
                 </div>
                 {lesson.swapHistory.map((item, index) => (
-                  <div key={index} className="flex items-center justify-between rounded bg-white px-2 py-1">
-                    <span className="font-semibold">{item.from} → {item.to}</span>
-                    <button onClick={() => removeSwapHistoryEntry(lesson.id, index)} className="px-1 text-slate-400 hover:text-red-500">
+                  <div key={index} className="flex items-center justify-between gap-1 rounded bg-white px-2 py-1">
+                    <div className="flex min-w-0 flex-1 items-center gap-1">
+                      <span className="font-semibold">{item.from}</span>
+                      <span>→</span>
+                      <select
+                        value={item.to || NO_PERSON}
+                        onChange={(e) => updateSwapReplacement(lesson.id, index, e.target.value)}
+                        className="min-w-0 flex-1 rounded border bg-orange-50 px-1 py-0.5 text-[11px] font-semibold text-orange-900"
+                      >
+                        <option value={NO_PERSON}>{NO_PERSON}</option>
+                        {assistants
+                          .filter((n) => n !== NO_PERSON)
+                          .map((name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <button onClick={() => removeSwapHistoryEntry(lesson.id, index)} className="shrink-0 px-1 text-slate-400 hover:text-red-500">
                       ×
                     </button>
                   </div>
                 ))}
-                <p className="text-[10px] text-orange-700">조교 칸을 직접 바꾸면 위 배정이 수정됩니다. 표시만 지우려면 ×, 전부 지우려면 ‘전체 초기화’.</p>
+                <p className="text-[10px] text-orange-700">대체자를 드롭다운에서 바꾸면 배정도 함께 수정됩니다. 표시만 지우려면 ×, 전부 지우려면 ‘전체 초기화’.</p>
               </div>
             )}
             <div className="mt-2 flex gap-1">
