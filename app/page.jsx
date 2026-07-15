@@ -1332,28 +1332,32 @@ export default function Page() {
                   </button>
                 </div>
                 {lesson.swapHistory.map((item, index) => (
-                  <div key={index} className="flex items-center justify-between gap-1 rounded bg-white px-2 py-1">
-                    <div className="flex min-w-0 flex-1 items-center gap-1">
-                      <span className="font-semibold">{item.from}</span>
-                      <span>→</span>
-                      <select
-                        value={item.to || NO_PERSON}
-                        onChange={(e) => updateSwapReplacement(lesson.id, index, e.target.value)}
-                        className="min-w-0 flex-1 rounded border bg-orange-50 px-1 py-0.5 text-[11px] font-semibold text-orange-900"
+                  <div key={index} className="rounded bg-white p-1.5">
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="whitespace-nowrap text-[11px] font-semibold text-slate-700">
+                        {item.from} →
+                      </span>
+                      <button
+                        onClick={() => removeSwapHistoryEntry(lesson.id, index)}
+                        className="shrink-0 rounded px-1 text-slate-400 hover:text-red-500"
                       >
-                        <option value={NO_PERSON}>{NO_PERSON}</option>
-                        {assistants
-                          .filter((n) => n !== NO_PERSON)
-                          .map((name) => (
-                            <option key={name} value={name}>
-                              {name}
-                            </option>
-                          ))}
-                      </select>
+                        ×
+                      </button>
                     </div>
-                    <button onClick={() => removeSwapHistoryEntry(lesson.id, index)} className="shrink-0 px-1 text-slate-400 hover:text-red-500">
-                      ×
-                    </button>
+                    <select
+                      value={item.to || NO_PERSON}
+                      onChange={(e) => updateSwapReplacement(lesson.id, index, e.target.value)}
+                      className="mt-1 w-full rounded border bg-orange-50 px-1.5 py-1 text-[11px] font-semibold text-orange-900"
+                    >
+                      <option value={NO_PERSON}>{NO_PERSON}</option>
+                      {assistants
+                        .filter((n) => n !== NO_PERSON)
+                        .map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                    </select>
                   </div>
                 ))}
                 <p className="text-[10px] text-orange-700">대체자를 드롭다운에서 바꾸면 배정도 함께 수정됩니다. 표시만 지우려면 ×, 전부 지우려면 ‘전체 초기화’.</p>
