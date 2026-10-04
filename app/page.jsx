@@ -651,7 +651,7 @@ export default function Page() {
     }
   };
 
-  // 시급 입력 확정: 3.5 → "35,000"으로 정리해서 저장
+  // 시급 입력 확정: 3 → "30,000"으로 정리해서 저장
   const commitRate = (v) => {
     const rate = parseHourlyRate(v);
     const normalized = rate ? rate.toLocaleString("ko-KR") : "";
@@ -673,7 +673,7 @@ export default function Page() {
   const confirmRateAndCopy = async () => {
     const rate = parseHourlyRate(rateInput);
     if (!rate) {
-      setRateError("시급을 숫자로 입력해 주세요. 예: 3.5 또는 35000");
+      setRateError("시급을 숫자로 입력해 주세요. 예: 3 또는 30000");
       return;
     }
     commitRate(rateInput);
@@ -2246,7 +2246,7 @@ export default function Page() {
                   className="w-24 rounded-lg border bg-white px-2 py-1 text-xs"
                   value={rateDraft}
                   onCommit={commitRate}
-                  placeholder="예: 3.5"
+                  placeholder="예: 30000"
                 />
               </div>
             )}
@@ -2271,7 +2271,7 @@ export default function Page() {
                 )}
             </div>
             <p className="mt-2 text-[11px] text-slate-500">
-              괄호 안에 시급(예: 3.5 또는 35000)을 입력하고 엔터를 치면 금액이 자동 계산돼요. 복사를 누르면 시급을 한 번 더 확인해요.
+              괄호 안에 시급(예: 3 또는 30000)을 입력하고 엔터를 치면 금액이 자동 계산돼요. 복사를 누르면 시급을 한 번 더 확인해요.
             </p>
           </div>
         )}
@@ -2452,7 +2452,7 @@ export default function Page() {
           <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold">수업 시급 입력</h3>
             <p className="mt-1 text-sm text-slate-500">
-              수업 1회는 {HOURS_PER_CLASS}시간으로 계산돼요. 예) 3 → 3만원, 3.5 → 35,000원, 30000 → 3만원
+              수업 1회는 {HOURS_PER_CLASS}시간으로 계산돼요. 예) 3 또는 30000 → 시급 30,000원
             </p>
             <input
               autoFocus
@@ -2467,7 +2467,7 @@ export default function Page() {
                 if (e.key === "Enter") confirmRateAndCopy();
                 if (e.key === "Escape") setRateModalOpen(false);
               }}
-              placeholder="시급 (예: 3.5)"
+              placeholder="시급 (예: 30000)"
             />
             {parsedRatePreview ? (
               <p className="mt-2 text-xs text-slate-500">
