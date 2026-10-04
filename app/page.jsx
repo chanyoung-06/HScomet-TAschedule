@@ -308,7 +308,14 @@ export default function Page() {
   const [rateModalOpen, setRateModalOpen] = useState(false);
   const [rateInput, setRateInput] = useState("");
   const [rateError, setRateError] = useState("");
-  const [settlementRate, setSettlementRate] = useState(null);
+  const [rateDraft, setRateDraft] = useState("");
+  const settlementRate = parseHourlyRate(rateDraft);
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(RATE_STORAGE_KEY);
+      if (saved) setRateDraft(saved);
+    } catch {}
+  }, []);
   const [exporting, setExporting] = useState(false);
   const [extra, setExtra] = useState({
     date: dateKey(today),
@@ -644,14 +651,20 @@ export default function Page() {
     }
   };
 
+  // 시급 입력 확정: 3.5 → "35,000"으로 정리해서 저장
+  const commitRate = (v) => {
+    const rate = parseHourlyRate(v);
+    const normalized = rate ? rate.toLocaleString("ko-KR") : "";
+    setRateDraft(normalized);
+    try {
+      if (rate) window.localStorage.setItem(RATE_STORAGE_KEY, normalized);
+    } catch {}
+  };
+
   // 복사 버튼 → 시급 입력창 열기
   const openRateModal = () => {
     if (!hasSettlement) return;
-    let saved = "";
-    try {
-      saved = window.localStorage.getItem(RATE_STORAGE_KEY) || "";
-    } catch {}
-    setRateInput(saved || (settlementRate ? String(settlementRate) : ""));
+    setRateInput(rateDraft);
     setRateError("");
     setRateModalOpen(true);
   };
@@ -663,10 +676,7 @@ export default function Page() {
       setRateError("시급을 숫자로 입력해 주세요. 예: 3.5 또는 35000");
       return;
     }
-    setSettlementRate(rate);
-    try {
-      window.localStorage.setItem(RATE_STORAGE_KEY, String(rate));
-    } catch {}
+    commitRate(rateInput);
     const ok = await copyText(formatSettlement(rate));
     setRateModalOpen(false);
     if (ok) {
@@ -2229,10 +2239,40 @@ export default function Page() {
                 {justCopiedSettlement ? "복사됨 ✓" : "복사"}
               </button>
             </div>
-            <pre className="whitespace-pre-wrap break-words rounded-xl bg-white p-3 font-mono text-xs leading-relaxed text-slate-800">
-{settlementText}
-            </pre>
-            <p className="mt-2 text-[11px] text-slate-500">복사를 누르면 수업 시급을 물어보고 금액을 자동 계산해요.</p>
+            {settlementData.regEntries.length === 0 && (
+              <div className="mb-2 flex items-center gap-2 text-xs">
+                <span className="font-semibold">시급</span>
+                <TextInput
+                  className="w-24 rounded-lg border bg-white px-2 py-1 text-xs"
+                  value={rateDraft}
+                  onCommit={commitRate}
+                  placeholder="예: 3.5"
+                />
+              </div>
+            )}
+            <div className="whitespace-pre-wrap break-words rounded-xl bg-white p-3 font-mono text-xs leading-relaxed text-slate-800">
+              {formatSettlement(settlementRate)
+                .split("\n")
+                .map((line, i) =>
+                  line.startsWith("*정규수업") ? (
+                    <div key={i} className="flex flex-wrap items-center">
+                      <span>*정규수업(</span>
+                      <TextInput
+                        className="mx-0.5 w-20 rounded border border-amber-300 bg-amber-50 px-1 py-0.5 text-center font-mono text-xs"
+                        value={rateDraft}
+                        onCommit={commitRate}
+                        placeholder="시급"
+                      />
+                      <span>)</span>
+                    </div>
+                  ) : (
+                    <div key={i}>{line || "\u00A0"}</div>
+                  )
+                )}
+            </div>
+            <p className="mt-2 text-[11px] text-slate-500">
+              괄호 안에 시급(예: 3.5 또는 35000)을 입력하고 엔터를 치면 금액이 자동 계산돼요. 복사를 누르면 시급을 한 번 더 확인해요.
+            </p>
           </div>
         )}
         {dailyText && (
