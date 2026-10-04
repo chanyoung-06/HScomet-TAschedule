@@ -114,6 +114,32 @@ const assistantPasswordSeed = {
 
 const DEFAULT_ASSISTANT_PASSWORD = "hscomet102";
 
+const HOURS_PER_CLASS = 3; // 수업 1회 = 3시간 (정산 계산 기준)
+const RATE_STORAGE_KEY = "hscomet-settlement-rate";
+
+// "HH:MM" + h시간 → "HH:MM" (자정을 넘으면 23:59로 제한)
+function addHoursToTime(t, h) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(t || "");
+  if (!m) return null;
+  const total = Number(m[1]) * 60 + Number(m[2]) + h * 60;
+  if (total >= 24 * 60) return "23:59";
+  return `${pad(Math.floor(total / 60))}:${pad(total % 60)}`;
+}
+
+// 시급 입력 해석: 3 → 30,000 / 3.5 → 35,000 / 30000 → 30,000 (1000 미만은 '만원' 단위로 간주)
+function parseHourlyRate(input) {
+  const cleaned = String(input ?? "").replace(/[^0-9.]/g, "");
+  const n = parseFloat(cleaned);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n < 1000 ? n * 10000 : n);
+}
+
+// 원 → "154만원", "10.5만원"
+function formatMan(won) {
+  const man = Math.round(won) / 10000;
+  return `${parseFloat(man.toFixed(2))}만원`;
+}
+
 function pad(n) {
   return String(n).padStart(2, "0");
 }
@@ -211,6 +237,9 @@ function AssistantSlot({ value, assistants, onChange, onRemove }) {
               {name}
             </option>
           ))}
+        {value && value !== NO_PERSON && !assistants.includes(value) && (
+          <option value={value}>{value} (퇴직)</option>
+        )}
       </select>
       <button onClick={onRemove} className="rounded-lg bg-white px-2 py-1 text-slate-500 hover:text-red-500">
         ×
@@ -266,6 +295,7 @@ export default function Page() {
   const [newAssistant, setNewAssistant] = useState("");
   const [newAssistantPassword, setNewAssistantPassword] = useState("");
   const [assistantPasswords, setAssistantPasswords] = useState(assistantPasswordSeed);
+  const [inactiveAssistants, setInactiveAssistants] = useState([]);
   const [assistantUnlocked, setAssistantUnlocked] = useState(false);
   const [assistantLoginName, setAssistantLoginName] = useState("강지후");
   const [assistantLoginPassword, setAssistantLoginPassword] = useState("");
@@ -275,6 +305,10 @@ export default function Page() {
   const [addWeekday, setAddWeekday] = useState("1");
   const [justCopiedSettlement, setJustCopiedSettlement] = useState(false);
   const [justCopiedDaily, setJustCopiedDaily] = useState(false);
+  const [rateModalOpen, setRateModalOpen] = useState(false);
+  const [rateInput, setRateInput] = useState("");
+  const [rateError, setRateError] = useState("");
+  const [settlementRate, setSettlementRate] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [extra, setExtra] = useState({
     date: dateKey(today),
@@ -303,6 +337,7 @@ export default function Page() {
     if (data.month) setMonth(data.month);
     if (data.assistants) setAssistants(data.assistants);
     if (data.assistantPasswords) setAssistantPasswords(data.assistantPasswords);
+    if (data.inactiveAssistants) setInactiveAssistants(data.inactiveAssistants);
     if (data.currentAssistant) setCurrentAssistant(data.currentAssistant);
     if (data.selectedAssistant) setSelectedAssistant(data.selectedAssistant);
     if (data.baseSchedule) {
@@ -325,6 +360,7 @@ export default function Page() {
     month,
     assistants,
     assistantPasswords,
+    inactiveAssistants,
     currentAssistant,
     selectedAssistant,
     baseSchedule,
@@ -412,6 +448,7 @@ export default function Page() {
       month,
       assistants,
       assistantPasswords,
+      inactiveAssistants,
       currentAssistant,
       selectedAssistant,
       baseSchedule,
@@ -449,6 +486,7 @@ export default function Page() {
     month,
     assistants,
     assistantPasswords,
+    inactiveAssistants,
     currentAssistant,
     selectedAssistant,
     baseSchedule,
@@ -460,6 +498,13 @@ export default function Page() {
 
   const isAdmin = role === "admin" && adminUnlocked;
   const isAllView = role === "all";
+  const activeAssistants = useMemo(
+    () => assistants.filter((n) => !inactiveAssistants.includes(n)),
+    [assistants, inactiveAssistants]
+  );
+  const loginOptions = activeAssistants.filter((n) => n !== NO_PERSON);
+  const effectiveLoginName = loginOptions.includes(assistantLoginName) ? assistantLoginName : loginOptions[0] || "";
+  const parsedRatePreview = rateModalOpen ? parseHourlyRate(rateInput) : null;
   const monthDates = useMemo(() => getMonthDates(year, month), [year, month]);
 
   const visibleLessons = useMemo(() => {
@@ -530,78 +575,106 @@ export default function Page() {
     return result;
   }, [lessons, assistants, year, month]);
 
-  // 조교 화면용 정산 내역 텍스트 (정규 / 추가·직보 분리)
-  const settlementText = useMemo(() => {
+  // 조교 화면용 정산 내역 (정규 / 추가·직보 분리)
+  const settlementData = useMemo(() => {
     const monthPrefix = `${year}-${pad(month)}-`;
     const shorten = (title) => title.replace(/^(한성|세종)\s+/, "");
     const orderMap = new Map(classNames.map((c, i) => [shorten(c), i]));
-    const regular = {};
-    const extra = {};
+    const regularCounts = {};
+    const extraCounts = {};
     lessons
       .filter((l) => l.date.startsWith(monthPrefix) && l.assistants.includes(currentAssistant))
       .forEach((l) => {
-        const bucket = l.type === "extra" ? extra : regular;
+        const bucket = l.type === "extra" ? extraCounts : regularCounts;
         const key = shorten(l.title);
         bucket[key] = (bucket[key] || 0) + 1;
       });
-
-    const lines = [];
-    const regEntries = Object.entries(regular);
-    if (regEntries.length) {
-      lines.push("*정규수업");
-      let total = 0;
-      regEntries
-        .sort((a, b) => {
-          const ai = orderMap.has(a[0]) ? orderMap.get(a[0]) : 999;
-          const bi = orderMap.has(b[0]) ? orderMap.get(b[0]) : 999;
-          if (ai !== bi) return ai - bi;
-          return a[0].localeCompare(b[0]);
-        })
-        .forEach(([name, count]) => {
-          lines.push(`${name}- ${count}회`);
-          total += count;
-        });
-      lines.push(`총 ${total}회`);
-    }
-    const extEntries = Object.entries(extra);
-    if (extEntries.length) {
-      if (lines.length) lines.push("");
-      lines.push("*추가&직보수업");
-      let total = 0;
-      extEntries
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .forEach(([name, count]) => {
-          lines.push(`${name}- ${count}회`);
-          total += count;
-        });
-      lines.push(`총 ${total}회`);
-    }
-    return lines.join("\n");
+    const regEntries = Object.entries(regularCounts).sort((a, b) => {
+      const ai = orderMap.has(a[0]) ? orderMap.get(a[0]) : 999;
+      const bi = orderMap.has(b[0]) ? orderMap.get(b[0]) : 999;
+      if (ai !== bi) return ai - bi;
+      return a[0].localeCompare(b[0]);
+    });
+    const extEntries = Object.entries(extraCounts).sort((a, b) => a[0].localeCompare(b[0]));
+    const regTotal = regEntries.reduce((sum, [, c]) => sum + c, 0);
+    const extTotal = extEntries.reduce((sum, [, c]) => sum + c, 0);
+    return { regEntries, extEntries, regTotal, extTotal };
   }, [lessons, currentAssistant, year, month]);
 
-  const copySettlement = async () => {
-    if (!settlementText) return;
-    const markCopied = () => {
+  // 시급(rate)이 있으면 금액까지 계산, 없으면 횟수만 표시
+  const formatSettlement = (rate) => {
+    const { regEntries, extEntries, regTotal, extTotal } = settlementData;
+    const money = (count) => (rate ? ` -> ${formatMan(count * HOURS_PER_CLASS * rate)}` : "");
+    const lines = [`[${month}월 급여 정산]`, "", `<${currentAssistant}>`, ""];
+    if (regEntries.length) {
+      lines.push(rate ? `*정규수업(${rate.toLocaleString("ko-KR")})` : "*정규수업");
+      regEntries.forEach(([name, count]) => lines.push(`${name}- ${count}회`));
+      lines.push(`총 ${regTotal}회${money(regTotal)}`, "");
+    }
+    if (extEntries.length) {
+      lines.push("*추가&직보수업");
+      extEntries.forEach(([name, count]) => lines.push(`${name}- ${count}회`));
+      lines.push(`총 ${extTotal}회${money(extTotal)}`, "");
+    }
+    lines.push("*기타수당", "", "“총 금액: 원 ”");
+    return lines.join("\n");
+  };
+
+  const hasSettlement = settlementData.regEntries.length + settlementData.extEntries.length > 0;
+  const settlementText = hasSettlement ? formatSettlement(settlementRate) : "";
+
+  const copyText = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        return ok;
+      } catch {
+        return false;
+      }
+    }
+  };
+
+  // 복사 버튼 → 시급 입력창 열기
+  const openRateModal = () => {
+    if (!hasSettlement) return;
+    let saved = "";
+    try {
+      saved = window.localStorage.getItem(RATE_STORAGE_KEY) || "";
+    } catch {}
+    setRateInput(saved || (settlementRate ? String(settlementRate) : ""));
+    setRateError("");
+    setRateModalOpen(true);
+  };
+
+  // 시급 확인 → 금액 계산해서 복사
+  const confirmRateAndCopy = async () => {
+    const rate = parseHourlyRate(rateInput);
+    if (!rate) {
+      setRateError("시급을 숫자로 입력해 주세요. 예: 3.5 또는 35000");
+      return;
+    }
+    setSettlementRate(rate);
+    try {
+      window.localStorage.setItem(RATE_STORAGE_KEY, String(rate));
+    } catch {}
+    const ok = await copyText(formatSettlement(rate));
+    setRateModalOpen(false);
+    if (ok) {
+      setSaveStatus("정산 내역 복사됨 ✓");
       setJustCopiedSettlement(true);
       window.setTimeout(() => setJustCopiedSettlement(false), 1500);
-    };
-    try {
-      await navigator.clipboard.writeText(settlementText);
-      setSaveStatus("정산 내역 복사됨 ✓");
-      markCopied();
-    } catch {
-      const ta = document.createElement("textarea");
-      ta.value = settlementText;
-      document.body.appendChild(ta);
-      ta.select();
-      try {
-        document.execCommand("copy");
-        setSaveStatus("정산 내역 복사됨 ✓");
-        markCopied();
-      } catch {
-        window.alert("복사에 실패했습니다. 텍스트를 직접 선택해서 복사해 주세요.");
-      }
-      document.body.removeChild(ta);
+    } else {
+      window.alert("복사에 실패했습니다. 텍스트를 직접 선택해서 복사해 주세요.");
     }
   };
 
@@ -716,6 +789,7 @@ export default function Page() {
       month,
       assistants,
       assistantPasswords,
+      inactiveAssistants,
       currentAssistant,
       selectedAssistant,
       baseSchedule,
@@ -743,7 +817,17 @@ export default function Page() {
 
   const addAssistant = () => {
     const name = newAssistant.trim();
-    if (!name || name === NO_PERSON || assistants.includes(name)) return;
+    if (!name || name === NO_PERSON) return;
+    if (assistants.includes(name)) {
+      if (inactiveAssistants.includes(name)) {
+        pushUndo("조교 복귀");
+        setInactiveAssistants((prev) => prev.filter((n) => n !== name));
+        setNewAssistant("");
+        setNewAssistantPassword("");
+        window.alert(`${name} 조교가 퇴직 목록에서 복귀했습니다.`);
+      }
+      return;
+    }
     pushUndo("조교 추가");
     setAssistants([...assistants.filter((x) => x !== NO_PERSON), name, NO_PERSON]);
     setAssistantPasswords((prev) => ({ ...prev, [name]: newAssistantPassword.trim() || DEFAULT_ASSISTANT_PASSWORD }));
@@ -756,14 +840,57 @@ export default function Page() {
     setAssistantPasswords((prev) => ({ ...prev, [name]: pw }));
   };
 
+  // 퇴직 처리: 목록에서만 숨기고 과거 출근 기록은 그대로 둔다
+  const retireAssistant = (name) => {
+    if (!name || name === NO_PERSON) return;
+    const inBase = Object.values(baseSchedule).reduce(
+      (acc, arr) => acc + (arr || []).reduce((a, l) => a + l.assistants.filter((n) => n === name).length, 0),
+      0
+    );
+    const msg =
+      `${name} 조교를 퇴직 처리할까요?\n` +
+      `- 로그인·배정 선택 목록에서 사라집니다.\n` +
+      `- 과거 출근 기록과 통계는 그대로 유지됩니다.` +
+      (inBase ? `\n- 기본 일정에 배정된 ${inBase}칸은 '인원 없음'으로 바뀝니다.` : "");
+    if (!window.confirm(msg)) return;
+    pushUndo("조교 퇴직 처리");
+    setInactiveAssistants((prev) => [...new Set([...prev, name])]);
+    if (inBase) {
+      setBaseSchedule((prev) => {
+        const next = {};
+        Object.keys(prev).forEach((k) => {
+          next[k] = (prev[k] || []).map((l) => ({
+            ...l,
+            assistants: l.assistants.map((n) => (n === name ? NO_PERSON : n)),
+          }));
+        });
+        return next;
+      });
+    }
+  };
+
+  const restoreAssistant = (name) => {
+    pushUndo("조교 복귀");
+    setInactiveAssistants((prev) => prev.filter((n) => n !== name));
+  };
+
+  const adminLogin = () => {
+    if (adminPassword === ADMIN_PASSWORD) {
+      setAdminUnlocked(true);
+      setAdminPassword("");
+    } else {
+      window.alert("비밀번호가 올바르지 않습니다.");
+    }
+  };
+
   const assistantLogin = () => {
-    const expected = assistantPasswords[assistantLoginName];
+    const expected = assistantPasswords[effectiveLoginName];
     if (expected === undefined) {
       window.alert("비밀번호가 설정되지 않은 조교입니다. 관리자에게 문의하세요.");
       return;
     }
     if (assistantLoginPassword === expected) {
-      setCurrentAssistant(assistantLoginName);
+      setCurrentAssistant(effectiveLoginName);
       setAssistantUnlocked(true);
       setAssistantLoginPassword("");
     } else {
@@ -781,10 +908,43 @@ export default function Page() {
     setLessons((prev) =>
       prev.map((lesson) => {
         if (lesson.id !== id) return lesson;
-        const next = [...lesson.assistants];
-        next[index] = value || NO_PERSON;
-        const cleanedSubs = (lesson.substituteAssistants || []).filter((n) => next.includes(n));
-        return { ...lesson, assistants: next, substituteAssistants: cleanedSubs };
+        const oldName = lesson.assistants[index];
+        const nextValue = value || NO_PERSON;
+        const nextAssistants = [...lesson.assistants];
+        nextAssistants[index] = nextValue;
+
+        // 바뀌기 전 값이 대타 내역의 "to"였다면 그 내역도 동기화
+        let history = lesson.swapHistory || [];
+        if (oldName && oldName !== NO_PERSON && oldName !== nextValue) {
+          const swapIdx = history.findIndex((h) => h.to === oldName);
+          if (swapIdx >= 0) {
+            const entry = history[swapIdx];
+            if (nextValue === entry.from) {
+              // 원래 조교로 되돌린 경우 → 대타 취소한 셈이니 내역 삭제
+              history = history.filter((_, i) => i !== swapIdx);
+            } else {
+              // 대체자를 또 다른 사람으로 교체
+              history = history.map((h, i) => (i === swapIdx ? { ...h, to: nextValue } : h));
+            }
+          }
+        }
+
+        // substituteAssistants 재계산: 실제로 배정에 있는 대체자만 유지
+        const subs = [
+          ...new Set(
+            history
+              .map((h) => h.to)
+              .filter((to) => to && to !== NO_PERSON && nextAssistants.includes(to))
+          ),
+        ];
+
+        return {
+          ...lesson,
+          assistants: nextAssistants,
+          swapHistory: history,
+          substituteAssistants: subs,
+          swap: history.length > 0 || (lesson.swapRequests || []).length > 0,
+        };
       })
     );
   };
@@ -1152,7 +1312,11 @@ export default function Page() {
     });
     const rows = [["조교", "총합", ...classList]];
     assistants
-      .filter((n) => n !== NO_PERSON)
+      .filter(
+        (n) =>
+          n !== NO_PERSON &&
+          (!inactiveAssistants.includes(n) || (assistantMonthlyStats[n]?.total || 0) > 0)
+      )
       .forEach((name) => {
         const s = assistantMonthlyStats[name] || { total: 0, byClass: {} };
         rows.push([name, s.total, ...classList.map((c) => s.byClass[c] || 0)]);
@@ -1209,7 +1373,7 @@ export default function Page() {
   // 조교별로 각각 이미지 저장 (인원 수만큼 파일 생성)
   const exportPerAssistantImages = async () => {
     if (typeof window === "undefined") return;
-    const targets = assistants.filter((n) => n !== NO_PERSON);
+    const targets = activeAssistants.filter((n) => n !== NO_PERSON);
     if (!targets.length) {
       window.alert("조교가 없습니다.");
       return;
@@ -1346,7 +1510,7 @@ export default function Page() {
                 <AssistantSlot
                   key={`${lesson.id}-${index}`}
                   value={name}
-                  assistants={assistants}
+                  assistants={activeAssistants}
                   onChange={(value) => updateLessonAssistant(lesson.id, index, value)}
                   onRemove={() => removeLessonAssistantSlot(lesson.id, index)}
                 />
@@ -1369,7 +1533,7 @@ export default function Page() {
                       value={swapApprovals[`${lesson.id}-${name}`] || NO_PERSON}
                       onChange={(e) => setSwapApprovals({ ...swapApprovals, [`${lesson.id}-${name}`]: e.target.value })}
                     >
-                      {assistants.map((assistant) => (
+                      {activeAssistants.map((assistant) => (
                         <option key={assistant} value={assistant}>
                           {assistant}
                         </option>
@@ -1409,13 +1573,16 @@ export default function Page() {
                       className="mt-1 w-full rounded border bg-orange-50 px-1.5 py-1 text-[11px] font-semibold text-orange-900"
                     >
                       <option value={NO_PERSON}>{NO_PERSON}</option>
-                      {assistants
+                      {activeAssistants
                         .filter((n) => n !== NO_PERSON)
                         .map((name) => (
                           <option key={name} value={name}>
                             {name}
                           </option>
                         ))}
+                      {item.to && item.to !== NO_PERSON && !activeAssistants.includes(item.to) && (
+                        <option value={item.to}>{item.to} (퇴직)</option>
+                      )}
                     </select>
                   </div>
                 ))}
@@ -1506,7 +1673,7 @@ export default function Page() {
                   <AssistantSlot
                     key={`${lesson.id}-base-${index}`}
                     value={name}
-                    assistants={assistants}
+                    assistants={activeAssistants}
                     onChange={(value) => updateBaseAssistant(dayNum, lesson.id, index, value)}
                     onRemove={() => removeBaseAssistantSlot(dayNum, lesson.id, index)}
                   />
@@ -1558,11 +1725,18 @@ export default function Page() {
                   <Search size={16} />
                   <select className="rounded-xl border px-3 py-2" value={selectedAssistant} onChange={(e) => setSelectedAssistant(e.target.value)}>
                     <option>전체</option>
-                    {assistants
+                    {activeAssistants
                       .filter((name) => name !== NO_PERSON)
                       .map((name) => (
                         <option key={name}>{name}</option>
                       ))}
+                    {inactiveAssistants.length > 0 && (
+                      <optgroup label="퇴직 조교 (과거 기록)">
+                        {inactiveAssistants.map((name) => (
+                          <option key={name}>{name}</option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                 </label>
               )}
@@ -1739,15 +1913,16 @@ export default function Page() {
                 placeholder={extra.type === "regular" ? "수업명 예: 한성 34기" : "수업명 예: 34기 추가, 35기 직보"}
               />
               <div className="grid grid-cols-2 gap-2">
-                <input className="rounded-xl border p-2" type="time" value={extra.start} onChange={(e) => setExtra({ ...extra, start: e.target.value })} />
+                <input className="rounded-xl border p-2" type="time" value={extra.start} onChange={(e) => { const v = e.target.value; setExtra({ ...extra, start: v, end: addHoursToTime(v, 3) || extra.end }); }} />
                 <input className="rounded-xl border p-2" type="time" value={extra.end} onChange={(e) => setExtra({ ...extra, end: e.target.value })} />
               </div>
+              <p className="-mt-2 text-[11px] text-slate-500">시작 시간을 바꾸면 종료 시간이 3시간 뒤로 자동 설정돼요. 종료 시간은 따로 수정할 수 있어요.</p>
               <div className="space-y-2">
                 {extra.assistants.map((name, index) => (
                   <AssistantSlot
                     key={index}
                     value={name}
-                    assistants={assistants}
+                    assistants={activeAssistants}
                     onChange={(value) => {
                       const next = [...extra.assistants];
                       next[index] = value;
@@ -1856,7 +2031,7 @@ export default function Page() {
           </div>
           <div className="space-y-2">
             <p className="text-sm font-semibold text-slate-600">조교별 비밀번호</p>
-            {assistants
+            {activeAssistants
               .filter((name) => name !== NO_PERSON)
               .map((name) => (
                 <div key={name} className="flex items-center gap-2 rounded-xl bg-slate-100 p-2">
@@ -1867,10 +2042,35 @@ export default function Page() {
                     onCommit={(value) => setAssistantPassword(name, value)}
                     placeholder="미설정"
                   />
+                  <button
+                    onClick={() => retireAssistant(name)}
+                    className="shrink-0 rounded-lg bg-white px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50"
+                  >
+                    퇴직
+                  </button>
                 </div>
               ))}
             <p className="text-xs text-slate-500">조교는 본인 이름 + 이 비밀번호로 조교 화면에 입장합니다.</p>
           </div>
+          {inactiveAssistants.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-sm font-semibold text-slate-600">퇴직한 조교</p>
+              {inactiveAssistants.map((name) => (
+                <div key={name} className="flex items-center gap-2 rounded-xl bg-slate-50 p-2">
+                  <span className="min-w-0 flex-1 truncate text-sm text-slate-500">{name}</span>
+                  <button
+                    onClick={() => restoreAssistant(name)}
+                    className="shrink-0 rounded-lg bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                  >
+                    복귀
+                  </button>
+                </div>
+              ))}
+              <p className="text-xs text-slate-500">
+                퇴직 조교의 과거 출근 기록·통계는 그대로 남고, 로그인·배정 선택 목록에서만 숨겨집니다.
+              </p>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -1904,7 +2104,11 @@ export default function Page() {
           <h2 className="text-xl font-semibold">조교별 출근 횟수</h2>
           <div className="space-y-3">
             {assistants
-              .filter((n) => n !== NO_PERSON)
+              .filter(
+                (n) =>
+                  n !== NO_PERSON &&
+                  (!inactiveAssistants.includes(n) || (assistantMonthlyStats[n]?.total || 0) > 0)
+              )
               .map((name) => {
                 const s = assistantMonthlyStats[name] || { total: 0, byClass: {} };
                 const entries = Object.entries(s.byClass).sort((a, b) => {
@@ -1918,7 +2122,12 @@ export default function Page() {
                 return (
                   <div key={name} className="rounded-2xl bg-slate-100 p-3">
                     <div className="mb-2 flex items-center justify-between">
-                      <p className="font-bold">{name}</p>
+                      <p className="font-bold">
+                        {name}
+                        {inactiveAssistants.includes(name) && (
+                          <span className="ml-1 text-xs font-normal text-slate-400">(퇴직)</span>
+                        )}
+                      </p>
                       <p className="text-sm text-slate-600">
                         이번 달 <b className="text-slate-900">{s.total}회</b>
                       </p>
@@ -2010,7 +2219,7 @@ export default function Page() {
             <div className="mb-2 flex items-center justify-between">
               <p className="text-sm font-semibold">정산 내역</p>
               <button
-                onClick={copySettlement}
+                onClick={openRateModal}
                 className={`rounded-lg px-3 py-1.5 text-xs font-semibold shadow-sm transition-all active:scale-95 ${
                   justCopiedSettlement
                     ? "bg-emerald-500 text-white shadow-emerald-200"
@@ -2023,6 +2232,7 @@ export default function Page() {
             <pre className="whitespace-pre-wrap break-words rounded-xl bg-white p-3 font-mono text-xs leading-relaxed text-slate-800">
 {settlementText}
             </pre>
+            <p className="mt-2 text-[11px] text-slate-500">복사를 누르면 수업 시급을 물어보고 금액을 자동 계산해요.</p>
           </div>
         )}
         {dailyText && (
@@ -2097,14 +2307,6 @@ export default function Page() {
                   <Shield size={15} className="mr-1 inline" />관리자
                 </button>
               </div>
-              {role === "admin" && !adminUnlocked && (
-                <div className="flex gap-2">
-                  <input type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} placeholder="관리자 비밀번호" className="rounded-xl border px-3 py-2" />
-                  <Button onClick={() => (adminPassword === ADMIN_PASSWORD ? setAdminUnlocked(true) : alert("비밀번호가 올바르지 않습니다."))} className="rounded-xl">
-                    입장
-                  </Button>
-                </div>
-              )}
               <input className="w-24 rounded-xl border px-3 py-2" type="number" value={year} onChange={(e) => setYear(Number(e.target.value))} />
               <Button onClick={undoLast} disabled={undoStack.length === 0} variant="secondary" className="rounded-xl">
                 <Repeat2 size={16} className="mr-1" />되돌리기{undoStack.length > 0 ? ` (${undoStack.length})` : ""}
@@ -2132,6 +2334,32 @@ export default function Page() {
           </section>
         ) : isAllView ? (
           <ScheduleView />
+        ) : role === "admin" ? (
+          <Card className="mx-auto w-full max-w-md rounded-3xl border-none shadow-sm">
+            <CardContent className="space-y-4 p-6">
+              <h2 className="flex items-center gap-2 text-xl font-semibold">
+                <Shield size={20} /> 관리자 로그인
+              </h2>
+              <p className="text-sm text-slate-500">관리자 비밀번호를 입력하면 출근표를 수정할 수 있어요.</p>
+              <label className="block space-y-1 text-sm">
+                비밀번호
+                <input
+                  type="password"
+                  autoFocus
+                  className="w-full rounded-xl border px-3 py-2"
+                  value={adminPassword}
+                  onChange={(e) => setAdminPassword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") adminLogin();
+                  }}
+                  placeholder="비밀번호"
+                />
+              </label>
+              <Button onClick={adminLogin} className="w-full rounded-xl">
+                입장
+              </Button>
+            </CardContent>
+          </Card>
         ) : assistantUnlocked ? (
           <section className="grid gap-6 lg:grid-cols-[320px_1fr]">
             <AssistantPanel />
@@ -2148,14 +2376,12 @@ export default function Page() {
                 이름
                 <select
                   className="w-full rounded-xl border px-3 py-2"
-                  value={assistantLoginName}
+                  value={effectiveLoginName}
                   onChange={(e) => setAssistantLoginName(e.target.value)}
                 >
-                  {assistants
-                    .filter((name) => name !== NO_PERSON)
-                    .map((name) => (
-                      <option key={name}>{name}</option>
-                    ))}
+                  {loginOptions.map((name) => (
+                    <option key={name}>{name}</option>
+                  ))}
                 </select>
               </label>
               <label className="block space-y-1 text-sm">
@@ -2178,6 +2404,48 @@ export default function Page() {
           </Card>
         )}
       </div>
+      {rateModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 print:hidden"
+          onClick={() => setRateModalOpen(false)}
+        >
+          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold">수업 시급 입력</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              수업 1회는 {HOURS_PER_CLASS}시간으로 계산돼요. 예) 3 → 3만원, 3.5 → 35,000원, 30000 → 3만원
+            </p>
+            <input
+              autoFocus
+              inputMode="decimal"
+              className="mt-4 w-full rounded-xl border px-3 py-2"
+              value={rateInput}
+              onChange={(e) => {
+                setRateInput(e.target.value);
+                setRateError("");
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") confirmRateAndCopy();
+                if (e.key === "Escape") setRateModalOpen(false);
+              }}
+              placeholder="시급 (예: 3.5)"
+            />
+            {parsedRatePreview ? (
+              <p className="mt-2 text-xs text-slate-500">
+                시급 {parsedRatePreview.toLocaleString("ko-KR")}원 · 수업 1회 {formatMan(parsedRatePreview * HOURS_PER_CLASS)}
+              </p>
+            ) : null}
+            {rateError && <p className="mt-2 text-xs text-red-600">{rateError}</p>}
+            <div className="mt-5 flex gap-2">
+              <Button onClick={() => setRateModalOpen(false)} variant="secondary" className="flex-1 rounded-xl">
+                취소
+              </Button>
+              <Button onClick={confirmRateAndCopy} className="flex-1 rounded-xl">
+                계산해서 복사
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
