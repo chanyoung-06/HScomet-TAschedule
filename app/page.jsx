@@ -117,6 +117,18 @@ const DEFAULT_ASSISTANT_PASSWORD = "hscomet102";
 const HOURS_PER_CLASS = 3; // 수업 1회 = 3시간 (정산 계산 기준)
 const RATE_STORAGE_KEY = "hscomet-settlement-rate";
 
+// 모바일 칸용 짧은 시간 표기: 13:00 → 13 / 09:30 → 9:30
+function compactTime(t) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(t || "");
+  if (!m) return t || "";
+  const h = String(Number(m[1]));
+  return m[2] === "00" ? h : `${h}:${m[2]}`;
+}
+// "13~16" / "9:30~12:30" (좁으면 ~ 뒤에서만 줄바꿈)
+function compactRange(a, b) {
+  return `${compactTime(a)}~\u200B${compactTime(b)}`;
+}
+
 // "HH:MM" + h시간 → "HH:MM" (자정을 넘으면 23:59로 제한)
 function addHoursToTime(t, h) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(t || "");
@@ -305,6 +317,7 @@ export default function Page() {
   const [addWeekday, setAddWeekday] = useState("1");
   const [justCopiedSettlement, setJustCopiedSettlement] = useState(false);
   const [justCopiedDaily, setJustCopiedDaily] = useState(false);
+  const [detailLessonId, setDetailLessonId] = useState(null);
   const [rateModalOpen, setRateModalOpen] = useState(false);
   const [rateInput, setRateInput] = useState("");
   const [rateError, setRateError] = useState("");
@@ -359,7 +372,6 @@ export default function Page() {
     }
     if (data.lessons) setLessons(data.lessons);
     if (data.viewMode) setViewMode(data.viewMode);
-    if (data.deviceMode) setDeviceMode(data.deviceMode);
   };
 
   const makeSnapshot = () => ({
@@ -374,7 +386,6 @@ export default function Page() {
     enabledWeekdays,
     lessons,
     viewMode,
-    deviceMode,
   });
 
   const pushUndo = (label) => {
@@ -462,7 +473,6 @@ export default function Page() {
       enabledWeekdays,
       lessons,
       viewMode,
-      deviceMode,
     };
 
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -500,7 +510,6 @@ export default function Page() {
     enabledWeekdays,
     lessons,
     viewMode,
-    deviceMode,
   ]);
 
   const isAdmin = role === "admin" && adminUnlocked;
@@ -512,6 +521,7 @@ export default function Page() {
   const loginOptions = activeAssistants.filter((n) => n !== NO_PERSON);
   const effectiveLoginName = loginOptions.includes(assistantLoginName) ? assistantLoginName : loginOptions[0] || "";
   const parsedRatePreview = rateModalOpen ? parseHourlyRate(rateInput) : null;
+  const detailLesson = detailLessonId ? lessons.find((l) => l.id === detailLessonId) || null : null;
   const monthDates = useMemo(() => getMonthDates(year, month), [year, month]);
 
   const visibleLessons = useMemo(() => {
@@ -806,7 +816,6 @@ export default function Page() {
       enabledWeekdays,
       lessons,
       viewMode,
-      deviceMode,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     if (!supabase) {
@@ -1267,6 +1276,7 @@ export default function Page() {
 
   const deleteLesson = (id) => {
     pushUndo("수업 삭제");
+    setDetailLessonId((cur) => (cur === id ? null : cur));
     setLessons((prev) => prev.filter((lesson) => lesson.id !== id));
   };
 
@@ -1342,10 +1352,11 @@ export default function Page() {
     const prevRole = role;
     const prevSelected = selectedAssistant;
     const prevDevice = deviceMode;
+    const exportMode = window.innerWidth < 768 ? "mobile" : "web";
     if (viewMode !== "calendar") setViewMode("calendar");
     if (role !== "all") setRole("all");
     if (selectedAssistant !== "전체") setSelectedAssistant("전체");
-    if (deviceMode !== "web") setDeviceMode("web");
+    if (deviceMode !== exportMode) setDeviceMode(exportMode);
     // 렌더링 반영 대기
     await new Promise((r) => window.setTimeout(r, 250));
     try {
@@ -1375,7 +1386,7 @@ export default function Page() {
       if (prevMode !== "calendar") setViewMode(prevMode);
       if (prevRole !== "all") setRole(prevRole);
       if (prevSelected !== "전체") setSelectedAssistant(prevSelected);
-      if (prevDevice !== "web") setDeviceMode(prevDevice);
+      if (prevDevice !== exportMode) setDeviceMode(prevDevice);
       setExporting(false);
     }
   };
@@ -1395,9 +1406,10 @@ export default function Page() {
     const prevRole = role;
     const prevSelected = selectedAssistant;
     const prevDevice = deviceMode;
+    const exportMode = window.innerWidth < 768 ? "mobile" : "web";
     if (viewMode !== "calendar") setViewMode("calendar");
     if (role !== "all") setRole("all");
-    if (deviceMode !== "web") setDeviceMode("web");
+    if (deviceMode !== exportMode) setDeviceMode(exportMode);
 
     try {
       const { toPng } = await import("html-to-image");
@@ -1434,7 +1446,7 @@ export default function Page() {
       if (prevMode !== "calendar") setViewMode(prevMode);
       if (prevRole !== "all") setRole(prevRole);
       setSelectedAssistant(prevSelected);
-      if (prevDevice !== "web") setDeviceMode(prevDevice);
+      if (prevDevice !== exportMode) setDeviceMode(prevDevice);
       setExporting(false);
     }
   };
@@ -1444,7 +1456,7 @@ export default function Page() {
     const isSat = dow === 6;
     const bg = lesson.type === "extra" ? "bg-fuchsia-100" : weekdayCardTone(dow);
     const requested = lesson.swapRequests.includes(currentAssistant);
-    const mobile = deviceMode === "mobile";
+    const mobile = calendarView; // 캘린더 칸 안(좁은 폭)에서만 작은 글씨
 
     // 캘린더 셀 안: 관리자 아닌 화면(전체/조교)에서는 압축 렌더로 세로 길이 최소화하되 가독성 유지
     if (calendarView && !isAdmin) {
@@ -1705,11 +1717,60 @@ export default function Page() {
   };
 
   const ScheduleView = () => {
-    const mobile = deviceMode === "mobile";
+    const fit = deviceMode === "mobile"; // 폰 화면 폭에 맞춰 비율 조절하는 모드
+
+    // 수업이 있는 요일은 넓게, 없는 요일은 좁게 (일=0 ... 토=6)
+    const colWeights = days.map((_, dow) =>
+      monthDates.some(
+        (d) => d.getMonth() === month - 1 && d.getDay() === dow && (lessonsByDate[dateKey(d)] || []).length > 0
+      )
+        ? 1.5
+        : 0.62
+    );
+    const gridCols = colWeights.map((w) => `minmax(0, ${w}fr)`).join(" ");
+    // 이번 달 날짜가 하나도 없는 주는 숨겨서 세로 길이 줄임
+    const fitDates = monthDates.filter((_, i) => {
+      const ws = Math.floor(i / 7) * 7;
+      return monthDates.slice(ws, ws + 7).some((x) => x.getMonth() === month - 1);
+    });
+
+    const renderMini = (lesson) => {
+      const dow = new Date(`${lesson.date}T00:00:00`).getDay();
+      const bg = lesson.type === "extra" ? "bg-fuchsia-100" : weekdayCardTone(dow);
+      const names = sortAssistantsForDisplay(lesson.assistants).filter((n) => n !== NO_PERSON);
+      const pending = isAdmin && (lesson.swapRequests || []).length > 0;
+      return (
+        <button
+          type="button"
+          key={lesson.id}
+          onClick={() => setDetailLessonId(lesson.id)}
+          className={`m-lesson block w-full rounded text-left ${bg} ${pending ? "ring-1 ring-amber-500" : ""}`}
+        >
+          <div className="m-title">{lesson.title}</div>
+          <div className="m-time">{compactRange(lesson.start, lesson.end)}</div>
+          <div className="m-names">
+            {names.length ? (
+              names.map((name, i) => (
+                <span key={`${name}-${i}`} className={lesson.substituteAssistants?.includes(name) ? "m-sub" : ""}>
+                  {name}
+                </span>
+              ))
+            ) : (
+              <span className="m-empty">미배정</span>
+            )}
+          </div>
+          {(lesson.swapHistory || []).map((h, i) => (
+            <div key={i} className="m-swap">
+              {h.from}→{h.to}
+            </div>
+          ))}
+        </button>
+      );
+    };
 
     return (
       <Card id="schedule-capture" className="rounded-3xl border-none shadow-sm">
-        <CardContent className="p-4 md:p-5">
+        <CardContent className={fit ? "p-2" : "p-4 md:p-5"}>
           <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <h2 className="flex items-center gap-2 text-xl font-semibold">
               <ClipboardList size={20} /> {year}년 {month}월{" "}
@@ -1753,9 +1814,46 @@ export default function Page() {
             </div>
           </div>
 
-          {viewMode === "calendar" ? (
-            <div className={mobile ? "overflow-x-auto pb-2" : ""}>
-              <div className={`grid grid-cols-7 overflow-hidden rounded-2xl border bg-white text-center font-semibold ${mobile ? "min-w-[760px] text-[11px]" : "text-sm"}`}>
+          {viewMode === "calendar" && fit ? (
+            <div>
+              <div className="m-cal overflow-hidden rounded-xl border border-slate-200 bg-white">
+                <div className="grid" style={{ gridTemplateColumns: gridCols }}>
+                  {days.map((dName, i) => (
+                    <div
+                      key={dName}
+                      className={`border-b border-r border-slate-200 bg-slate-100 py-1 text-center font-semibold ${
+                        i === 0 ? "text-blue-600" : i === 6 ? "text-rose-500" : "text-slate-700"
+                      }`}
+                    >
+                      {dName}
+                    </div>
+                  ))}
+                  {fitDates.map((d) => {
+                    const key = dateKey(d);
+                    const inMonth = d.getMonth() === month - 1;
+                    const bg = !inMonth
+                      ? "bg-slate-50 text-slate-300"
+                      : d.getDay() === 6
+                        ? "bg-rose-50"
+                        : d.getDay() === 0
+                          ? "bg-blue-50"
+                          : "bg-white";
+                    return (
+                      <div key={key} className={`min-h-[44px] border-b border-r border-slate-200 p-0.5 ${bg}`}>
+                        <div className="m-date">{d.getDate()}</div>
+                        <div className="space-y-0.5">{(lessonsByDate[key] || []).map((lesson) => renderMini(lesson))}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <p className="px-1 pt-1.5 text-[11px] text-slate-500">
+                수업 칸을 누르면 자세히 볼 수 있어요{isAdmin ? " (수정도 여기서)" : role === "assistant" ? " (대타 요청도 여기서)" : ""}.
+              </p>
+            </div>
+          ) : viewMode === "calendar" ? (
+            <div className="overflow-x-auto pb-2">
+              <div className="grid min-w-[760px] grid-cols-7 overflow-hidden rounded-2xl border bg-white text-center text-[11px] font-semibold">
                 {days.map((d) => (
                   <div key={d} className="border-b bg-slate-100 p-2">
                     {d}
@@ -1768,7 +1866,7 @@ export default function Page() {
                   const isSun = d.getDay() === 0;
                   const bg = !inMonth ? "bg-slate-50 text-slate-300" : isSat ? "bg-rose-50" : isSun ? "bg-blue-50" : "bg-white";
                   return (
-                    <div key={key} className={`cal-cell border text-left ${bg} ${mobile ? "min-h-[120px] p-2" : isAdmin ? "min-h-[180px] p-2" : "min-h-[130px] p-2"}`}>
+                    <div key={key} className={`cal-cell border text-left ${bg} min-h-[120px] p-2`}>
                       <div className="cal-date mb-1.5 flex justify-between">
                         <span className="font-bold">{d.getDate()}</span>
                         {inMonth && (isSat || isSun) && <span className="cal-badge rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-500">정규</span>}
@@ -2300,8 +2398,18 @@ export default function Page() {
   );
 
   return (
-    <main className="min-h-screen bg-slate-50 p-4 text-slate-900 md:p-6">
+    <main className={`min-h-screen bg-slate-50 text-slate-900 ${deviceMode === "mobile" ? "p-2" : "p-4 md:p-6"}`}>
       <style>{`
+        .m-cal { font-size: clamp(8px, 2.5vw, 12px); line-height: 1.25; }
+        .m-cal .m-date { font-weight: 700; font-size: 1.05em; padding: 0 2px 2px; }
+        .m-cal .m-lesson { padding: 2px 3px; word-break: keep-all; overflow-wrap: anywhere; }
+        .m-cal .m-title { font-weight: 700; }
+        .m-cal .m-time { color: #64748b; font-size: 0.9em; }
+        .m-cal .m-names { display: flex; flex-wrap: wrap; column-gap: 3px; margin-top: 1px; }
+        .m-cal .m-names span { white-space: nowrap; }
+        .m-cal .m-sub { background: #fed7aa; color: #7c2d12; font-weight: 700; border-radius: 3px; padding: 0 2px; }
+        .m-cal .m-empty { color: #94a3b8; }
+        .m-cal .m-swap { color: #9a3412; font-weight: 600; font-size: 0.9em; white-space: nowrap; }
         @media print {
           @page { size: A4 landscape; margin: 6mm; }
           html, body { background: white !important; }
@@ -2323,7 +2431,7 @@ export default function Page() {
         }
       `}</style>
       <div className="mx-auto max-w-7xl space-y-6">
-        <motion.header initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="rounded-3xl bg-white p-6 shadow-sm print:hidden">
+        <motion.header initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className={`rounded-3xl bg-white shadow-sm print:hidden ${deviceMode === "mobile" ? "p-4" : "p-6"}`}>
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>
               <p className="mb-2 inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-600">
@@ -2444,6 +2552,25 @@ export default function Page() {
           </Card>
         )}
       </div>
+      {detailLesson && (
+        <div
+          className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 print:hidden"
+          onClick={() => setDetailLessonId(null)}
+        >
+          <div
+            className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-white p-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-base font-semibold">{prettyDate(detailLesson.date)} 수업</h3>
+              <button onClick={() => setDetailLessonId(null)} className="rounded-lg bg-slate-100 px-3 py-1 text-sm font-semibold">
+                닫기
+              </button>
+            </div>
+            <LessonCard lesson={detailLesson} compact />
+          </div>
+        </div>
+      )}
       {rateModalOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 print:hidden"
