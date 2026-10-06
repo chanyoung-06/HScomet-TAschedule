@@ -260,7 +260,7 @@ function AssistantSlot({ value, assistants, onChange, onRemove }) {
   );
 }
 
-function TextInput({ value, onCommit, placeholder, className = "" }) {
+function TextInput({ value, onCommit, onLiveChange, placeholder, className = "" }) {
   const [local, setLocal] = useState(value || "");
 
   useEffect(() => {
@@ -271,7 +271,10 @@ function TextInput({ value, onCommit, placeholder, className = "" }) {
     <input
       className={className || "rounded-xl border p-2"}
       value={local}
-      onChange={(e) => setLocal(e.target.value)}
+      onChange={(e) => {
+        setLocal(e.target.value);
+        if (onLiveChange) onLiveChange(e.target.value);
+      }}
       onBlur={() => onCommit(local)}
       onKeyDown={(e) => {
         if (e.key === "Enter") e.currentTarget.blur();
@@ -318,15 +321,14 @@ export default function Page() {
   const [justCopiedSettlement, setJustCopiedSettlement] = useState(false);
   const [justCopiedDaily, setJustCopiedDaily] = useState(false);
   const [detailLessonId, setDetailLessonId] = useState(null);
-  const [rateModalOpen, setRateModalOpen] = useState(false);
-  const [rateInput, setRateInput] = useState("");
   const [rateError, setRateError] = useState("");
   const [rateDraft, setRateDraft] = useState("");
+  const rateRawRef = useRef(""); // 입력 중인 시급(엔터 전)도 복사 시 반영하기 위한 값
   const settlementRate = parseHourlyRate(rateDraft);
+  // 시급은 저장하지 않고 항상 빈칸에서 시작 (예전에 저장된 값도 정리)
   useEffect(() => {
     try {
-      const saved = window.localStorage.getItem(RATE_STORAGE_KEY);
-      if (saved) setRateDraft(saved);
+      window.localStorage.removeItem(RATE_STORAGE_KEY);
     } catch {}
   }, []);
   const [exporting, setExporting] = useState(false);
@@ -520,7 +522,6 @@ export default function Page() {
   );
   const loginOptions = activeAssistants.filter((n) => n !== NO_PERSON);
   const effectiveLoginName = loginOptions.includes(assistantLoginName) ? assistantLoginName : loginOptions[0] || "";
-  const parsedRatePreview = rateModalOpen ? parseHourlyRate(rateInput) : null;
   const detailLesson = detailLessonId ? lessons.find((l) => l.id === detailLessonId) || null : null;
   const monthDates = useMemo(() => getMonthDates(year, month), [year, month]);
 
@@ -661,38 +662,38 @@ export default function Page() {
     }
   };
 
-  // 시급 입력 확정: 3 → "30,000"으로 정리해서 저장
+  // 시급 입력 확정: 3 → "30,000"으로 정리 (저장은 하지 않음)
   const commitRate = (v) => {
     const rate = parseHourlyRate(v);
     const normalized = rate ? rate.toLocaleString("ko-KR") : "";
+    rateRawRef.current = normalized;
     setRateDraft(normalized);
-    try {
-      if (rate) window.localStorage.setItem(RATE_STORAGE_KEY, normalized);
-    } catch {}
-  };
-
-  // 복사 버튼 → 시급 입력창 열기
-  const openRateModal = () => {
-    if (!hasSettlement) return;
-    setRateInput(rateDraft);
     setRateError("");
-    setRateModalOpen(true);
+  };
+  const onRateLive = (v) => {
+    rateRawRef.current = v;
+  };
+  const resetRate = () => {
+    rateRawRef.current = "";
+    setRateDraft("");
+    setRateError("");
   };
 
-  // 시급 확인 → 금액 계산해서 복사
-  const confirmRateAndCopy = async () => {
-    const rate = parseHourlyRate(rateInput);
+  // 복사 버튼: 노란 칸의 시급으로 금액을 계산해 바로 복사 (확인창 없음)
+  const copySettlementNow = async () => {
+    if (!hasSettlement) return;
+    const rate = parseHourlyRate(rateRawRef.current || rateDraft);
     if (!rate) {
-      setRateError("시급을 숫자로 입력해 주세요. 예: 3 또는 30000");
+      setRateError("시급을 먼저 입력해 주세요. (노란 칸에 입력 후 복사)");
       return;
     }
-    commitRate(rateInput);
+    setRateError("");
     const ok = await copyText(formatSettlement(rate));
-    setRateModalOpen(false);
     if (ok) {
       setSaveStatus("정산 내역 복사됨 ✓");
       setJustCopiedSettlement(true);
       window.setTimeout(() => setJustCopiedSettlement(false), 1500);
+      resetRate(); // 복사 후 시급 칸 초기화
     } else {
       window.alert("복사에 실패했습니다. 텍스트를 직접 선택해서 복사해 주세요.");
     }
@@ -912,6 +913,7 @@ export default function Page() {
       setCurrentAssistant(effectiveLoginName);
       setAssistantUnlocked(true);
       setAssistantLoginPassword("");
+      resetRate();
     } else {
       window.alert("비밀번호가 올바르지 않습니다.");
     }
@@ -920,6 +922,7 @@ export default function Page() {
   const assistantLogout = () => {
     setAssistantUnlocked(false);
     setAssistantLoginPassword("");
+    resetRate();
   };
 
   const updateLessonAssistant = (id, index, value) => {
@@ -1873,7 +1876,7 @@ export default function Page() {
                       </div>
                       <div className="cal-lesson-stack space-y-1.5">
                         {(lessonsByDate[key] || []).map((lesson) => (
-                          <LessonCard key={lesson.id} lesson={lesson} calendarView />
+                          <React.Fragment key={lesson.id}>{LessonCard({ lesson, calendarView: true })}</React.Fragment>
                         ))}
                       </div>
                     </div>
@@ -1884,7 +1887,7 @@ export default function Page() {
           ) : (
             <div className="space-y-3">
               {visibleLessons.map((lesson) => (
-                <LessonCard key={lesson.id} lesson={lesson} compact />
+                <React.Fragment key={lesson.id}>{LessonCard({ lesson, compact: true })}</React.Fragment>
               ))}
             </div>
           )}
@@ -2096,7 +2099,7 @@ export default function Page() {
               )}
 
               {enabledWeekdays.map((dayNum) => (
-                <BaseScheduleEditor key={dayNum} dayNum={dayNum} />
+                <React.Fragment key={dayNum}>{BaseScheduleEditor({ dayNum })}</React.Fragment>
               ))}
 
               <Button onClick={saveNow} className="w-full rounded-xl">
@@ -2327,7 +2330,7 @@ export default function Page() {
             <div className="mb-2 flex items-center justify-between">
               <p className="text-sm font-semibold">정산 내역</p>
               <button
-                onClick={openRateModal}
+                onClick={copySettlementNow}
                 className={`rounded-lg px-3 py-1.5 text-xs font-semibold shadow-sm transition-all active:scale-95 ${
                   justCopiedSettlement
                     ? "bg-emerald-500 text-white shadow-emerald-200"
@@ -2344,6 +2347,7 @@ export default function Page() {
                   className="w-24 rounded-lg border bg-white px-2 py-1 text-xs"
                   value={rateDraft}
                   onCommit={commitRate}
+                        onLiveChange={onRateLive}
                   placeholder="예: 30000"
                 />
               </div>
@@ -2359,6 +2363,7 @@ export default function Page() {
                         className="mx-0.5 w-20 rounded border border-amber-300 bg-amber-50 px-1 py-0.5 text-center font-mono text-xs"
                         value={rateDraft}
                         onCommit={commitRate}
+                        onLiveChange={onRateLive}
                         placeholder="시급"
                       />
                       <span>)</span>
@@ -2368,8 +2373,9 @@ export default function Page() {
                   )
                 )}
             </div>
+            {rateError && <p className="mt-2 text-xs font-semibold text-red-600">{rateError}</p>}
             <p className="mt-2 text-[11px] text-slate-500">
-              괄호 안에 시급(예: 3 또는 30000)을 입력하고 엔터를 치면 금액이 자동 계산돼요. 복사를 누르면 시급을 한 번 더 확인해요.
+              노란 칸에 시급(예: 3 또는 30000)을 입력하고 복사를 누르면 금액이 계산돼 바로 복사돼요. 복사하면 시급 칸은 비워져요.
             </p>
           </div>
         )}
@@ -2477,11 +2483,11 @@ export default function Page() {
 
         {isAdmin ? (
           <section className="grid gap-6 lg:grid-cols-[1fr_390px]">
-            <ScheduleView />
-            <AdminPanel />
+            {ScheduleView()}
+            {AdminPanel()}
           </section>
         ) : isAllView ? (
-          <ScheduleView />
+          ScheduleView()
         ) : role === "admin" ? (
           <Card className="mx-auto w-full max-w-md rounded-3xl border-none shadow-sm">
             <CardContent className="space-y-4 p-6">
@@ -2510,8 +2516,8 @@ export default function Page() {
           </Card>
         ) : assistantUnlocked ? (
           <section className="grid gap-6 lg:grid-cols-[320px_1fr]">
-            <AssistantPanel />
-            <ScheduleView />
+            {AssistantPanel()}
+            {ScheduleView()}
           </section>
         ) : (
           <Card className="mx-auto w-full max-w-md rounded-3xl border-none shadow-sm">
@@ -2567,49 +2573,7 @@ export default function Page() {
                 닫기
               </button>
             </div>
-            <LessonCard lesson={detailLesson} compact />
-          </div>
-        </div>
-      )}
-      {rateModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 print:hidden"
-          onClick={() => setRateModalOpen(false)}
-        >
-          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold">수업 시급 입력</h3>
-            <p className="mt-1 text-sm text-slate-500">
-              수업 1회는 {HOURS_PER_CLASS}시간으로 계산돼요. 예) 3 또는 30000 → 시급 30,000원
-            </p>
-            <input
-              autoFocus
-              inputMode="decimal"
-              className="mt-4 w-full rounded-xl border px-3 py-2"
-              value={rateInput}
-              onChange={(e) => {
-                setRateInput(e.target.value);
-                setRateError("");
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") confirmRateAndCopy();
-                if (e.key === "Escape") setRateModalOpen(false);
-              }}
-              placeholder="시급 (예: 30000)"
-            />
-            {parsedRatePreview ? (
-              <p className="mt-2 text-xs text-slate-500">
-                시급 {parsedRatePreview.toLocaleString("ko-KR")}원 · 수업 1회 {formatMan(parsedRatePreview * HOURS_PER_CLASS)}
-              </p>
-            ) : null}
-            {rateError && <p className="mt-2 text-xs text-red-600">{rateError}</p>}
-            <div className="mt-5 flex gap-2">
-              <Button onClick={() => setRateModalOpen(false)} variant="secondary" className="flex-1 rounded-xl">
-                취소
-              </Button>
-              <Button onClick={confirmRateAndCopy} className="flex-1 rounded-xl">
-                계산해서 복사
-              </Button>
-            </div>
+            {LessonCard({ lesson: detailLesson, compact: true })}
           </div>
         </div>
       )}
