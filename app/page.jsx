@@ -522,6 +522,16 @@ export default function Page() {
   );
   const loginOptions = activeAssistants.filter((n) => n !== NO_PERSON);
   const effectiveLoginName = loginOptions.includes(assistantLoginName) ? assistantLoginName : loginOptions[0] || "";
+  // 처리 대기 중인 대타 요청 (관리자 상단 처리 영역용)
+  const pendingSwaps = useMemo(() => {
+    const list = [];
+    lessons.forEach((l) => {
+      (l.swapRequests || []).forEach((requester) => list.push({ lesson: l, requester }));
+    });
+    return list.sort((a, b) =>
+      `${a.lesson.date} ${a.lesson.start}`.localeCompare(`${b.lesson.date} ${b.lesson.start}`)
+    );
+  }, [lessons]);
   const detailLesson = detailLessonId ? lessons.find((l) => l.id === detailLessonId) || null : null;
   const monthDates = useMemo(() => getMonthDates(year, month), [year, month]);
 
@@ -1277,6 +1287,21 @@ export default function Page() {
     );
   };
 
+  const rejectSwap = (id, requester) => {
+    pushUndo("대타 요청 거절");
+    setLessons((prev) =>
+      prev.map((lesson) => {
+        if (lesson.id !== id) return lesson;
+        const reqs = (lesson.swapRequests || []).filter((name) => name !== requester);
+        return {
+          ...lesson,
+          swapRequests: reqs,
+          swap: reqs.length > 0 || (lesson.swapHistory || []).length > 0,
+        };
+      })
+    );
+  };
+
   const deleteLesson = (id) => {
     pushUndo("수업 삭제");
     setDetailLessonId((cur) => (cur === id ? null : cur));
@@ -1900,6 +1925,66 @@ export default function Page() {
 
   const AdminPanel = () => (
     <aside className="space-y-6 print:hidden">
+      {pendingSwaps.length > 0 && (
+        <Card className="rounded-3xl border-none bg-amber-50 shadow-sm ring-1 ring-amber-200">
+          <CardContent className="space-y-3 p-5">
+            <h2 className="flex items-center gap-2 text-xl font-semibold text-amber-900">
+              <Repeat2 size={20} /> 대타 요청 처리
+              <span className="rounded-full bg-red-500 px-2 py-0.5 text-xs font-bold text-white">{pendingSwaps.length}</span>
+            </h2>
+            <p className="text-xs text-amber-800">대체 조교를 고르고 ‘승인’을 누르면 해당 수업 배정이 바로 바뀌어요.</p>
+            <div className="space-y-2">
+              {pendingSwaps.map(({ lesson, requester }) => {
+                const key = `${lesson.id}-${requester}`;
+                const options = activeAssistants.filter((n) => n === NO_PERSON || !lesson.assistants.includes(n));
+                return (
+                  <div key={key} className="rounded-2xl bg-white p-3 text-sm shadow-sm">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="font-bold text-slate-900">{requester}</span>
+                      <span className="text-xs text-slate-500">
+                        {prettyDate(lesson.date)} · {lesson.start}~{lesson.end}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 text-slate-700">
+                      {lesson.title}
+                      {lesson.type === "extra" ? " (추가)" : ""}
+                    </div>
+                    <div className="mt-0.5 text-xs text-slate-500">
+                      현재 배정: {lesson.assistants.filter((n) => n !== NO_PERSON).join(", ") || "-"}
+                    </div>
+                    <div className="mt-2 flex gap-1">
+                      <select
+                        className="min-w-0 flex-1 rounded-lg border bg-white px-2 py-1.5"
+                        value={swapApprovals[key] || NO_PERSON}
+                        onChange={(e) => setSwapApprovals({ ...swapApprovals, [key]: e.target.value })}
+                      >
+                        {options.map((name) => (
+                          <option key={name} value={name}>
+                            {name === NO_PERSON ? "대체 조교 선택 (미정)" : name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => approveSwap(lesson.id, requester)}
+                        className="shrink-0 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-all hover:bg-slate-700 active:scale-95"
+                      >
+                        승인
+                      </button>
+                      <button
+                        onClick={() => rejectSwap(lesson.id, requester)}
+                        className="shrink-0 rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-red-600 ring-1 ring-red-200 transition-all hover:bg-red-50 active:scale-95"
+                      >
+                        거절
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card className="rounded-3xl border-none shadow-sm">
         <CardContent className="space-y-4 p-5">
           <div className="rounded-xl bg-slate-100 p-1">
