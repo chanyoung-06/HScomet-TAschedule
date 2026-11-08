@@ -650,9 +650,11 @@ export default function Page() {
     showToast(ok ? "정산 내역을 복사했어요" : "복사에 실패했어요. 길게 눌러 직접 복사해 주세요");
   };
 
-  const setMyRate = (field, value) => {
-    setRates((prev) => ({ ...prev, [currentAssistant]: { ...(prev[currentAssistant] || {}), [field]: value } }));
+  const setRateFor = (name, field, value) => {
+    if ((rates[name]?.[field] || "") === value) return;
+    setRates((prev) => ({ ...prev, [name]: { ...(prev[name] || {}), [field]: value } }));
   };
+  const setMyRate = (field, value) => setRateFor(currentAssistant, field, value);
 
   const addAllowance = () => {
     const desc = etcDesc.trim();
@@ -1379,7 +1381,6 @@ export default function Page() {
   const loginView = () => (
     <div className="hs-panel hs-login">
       <h2>{isAdminRole ? "관리자 로그인" : "조교 로그인"}</h2>
-      <p className="hs-meta">이 기기에서 한 번 로그인하면 다음부터는 바로 들어가요.</p>
       {!isAdminRole && (
         <select value={effectiveLoginName} onChange={(e) => setLoginName(e.target.value)} aria-label="이름">
           {loginOptions.map((n) => (
@@ -1517,7 +1518,6 @@ export default function Page() {
             기타 시급
             <input type="text" inputMode="numeric" value={myRates.etc || ""} onChange={(e) => setMyRate("etc", e.target.value)} placeholder="(시급) 예: 30000" />
           </label>
-          <p className="hs-meta">수업 1회 = 3시간. 3 또는 30000처럼 입력해요. 한 번 넣으면 저장돼요.</p>
         </div>
 
         <div className="hs-tiles three">
@@ -2018,7 +2018,6 @@ export default function Page() {
           <input type="time" value={extra.end} onChange={(e) => setExtra({ ...extra, end: e.target.value })} />
         </label>
       </div>
-      <p className="hs-meta">시작 시간을 바꾸면 종료 시간이 3시간 뒤로 맞춰져요.</p>
       <div className="hs-edit">
         {extra.assistants.map((name, index) => (
           <AssistantSlot
@@ -2050,7 +2049,6 @@ export default function Page() {
   const availableToAdd = [1, 2, 3, 4, 5].filter((d) => !enabledWeekdays.includes(d));
   const baseEditor = () => (
     <div className="hs-form">
-      <p className="hs-meta">요일별로 기본 수업을 등록해 두면 ‘기본 일정으로 생성’ 때 그 달의 해당 요일마다 만들어져요.</p>
       {availableToAdd.length > 0 && (
         <div className="hs-inline">
           <select value={addWeekday} onChange={(e) => setAddWeekday(e.target.value)}>
@@ -2144,16 +2142,27 @@ export default function Page() {
           추가
         </button>
       </div>
-      <p className="hs-meta">비밀번호를 비우면 {DEFAULT_ASSISTANT_PASSWORD}로 설정돼요. 비밀번호를 바꾸면 그 조교는 다시 로그인해야 해요.</p>
       {activeAssistants
         .filter((n) => n !== NO_PERSON)
         .map((n) => (
-          <div key={n} className="hs-person">
-            <b>{n}</b>
-            <TextInput value={assistantPasswords[n] || ""} onCommit={(v) => setAssistantPassword(n, v)} placeholder="미설정" />
-            <button type="button" className="danger" onClick={() => retireAssistant(n)}>
-              퇴직
-            </button>
+          <div key={n} className="hs-personcard">
+            <div className="hs-person">
+              <b>{n}</b>
+              <TextInput value={assistantPasswords[n] || ""} onCommit={(v) => setAssistantPassword(n, v)} placeholder="비밀번호" />
+              <button type="button" className="danger" onClick={() => retireAssistant(n)}>
+                퇴직
+              </button>
+            </div>
+            <div className="hs-personrates">
+              <label>
+                수업 시급
+                <TextInput value={rates[n]?.cls || ""} onCommit={(v) => setRateFor(n, "cls", v)} placeholder="(시급)" />
+              </label>
+              <label>
+                기타 시급
+                <TextInput value={rates[n]?.etc || ""} onCommit={(v) => setRateFor(n, "etc", v)} placeholder="(시급)" />
+              </label>
+            </div>
           </div>
         ))}
       {inactiveAssistants.length > 0 && (
@@ -2168,7 +2177,6 @@ export default function Page() {
               </button>
             </div>
           ))}
-          <p className="hs-meta">퇴직 조교의 과거 출근 기록과 통계는 그대로 남아요.</p>
         </>
       )}
     </div>
@@ -2229,7 +2237,7 @@ export default function Page() {
       </div>
       {section("add", "수업 추가 (단일 · 기간)", addLessonForm())}
       {section("base", "기본 일정 (요일별)", baseEditor())}
-      {section("people", "조교 관리 · 비밀번호", assistantManager())}
+      {section("people", "조교 관리 · 비밀번호 · 시급", assistantManager())}
       {section("pay", "조교별 정산 · 기타수당", settlementViewer())}
       {section(
         "export",
@@ -2347,7 +2355,7 @@ export default function Page() {
           </h2>
           <span className="hs-meta">
             {mode === "capture" ? "혜성 코멧 학원 · " : ""}
-            {label} · {src.length}개{clickableHint(mode)}
+            {label} · {src.length}개
           </span>
         </div>
         <div className="hs-bgrid">
@@ -2363,10 +2371,6 @@ export default function Page() {
       </div>
     );
   };
-
-  function clickableHint(mode) {
-    return mode === "admin" || mode === "academy" ? " · 날짜를 누르면 왼쪽에 그날 수업이 나와요" : "";
-  }
 
   // ── 조립 ──
   const taTabs = [
@@ -2707,6 +2711,10 @@ const CSS = `
 .hs-base{background:var(--cb);border:1px solid var(--line);border-left:4px solid var(--c);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:8px}
 .hs-base-item{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:6px}
 .hs-base-item .hs-edit{margin-top:0}
+.hs-personcard{border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:8px}
+.hs-personrates{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.hs-personrates label{font-size:12px;color:var(--sub);display:flex;flex-direction:column;gap:4px}
+.hs-personrates input{padding:7px 8px;font-size:13px}
 .hs-person{display:grid;grid-template-columns:64px 1fr auto;gap:8px;align-items:center}
 .hs-person input{padding:7px 8px;font-size:13px}
 .hs-person button{border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;color:var(--sub)}
