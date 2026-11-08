@@ -686,6 +686,9 @@ export default function Page() {
       etc: items.length,
       unchecked: unchecked.length,
       absent: mine.filter((l) => l.attendance?.[name] === "absent").length,
+      planned: mine.length,
+      plannedReg: mine.filter((l) => l.type !== "extra").length,
+      plannedExt: mine.filter((l) => l.type === "extra").length,
     };
   };
 
@@ -1613,11 +1616,17 @@ export default function Page() {
         <div className="hs-tiles three">
           <div className="hs-panel">
             <small>정규 출근</small>
-            <b>{s.reg}회</b>
+            <b>
+              {s.reg}
+              <span className="of"> / {s.plannedReg}회</span>
+            </b>
           </div>
           <div className="hs-panel">
             <small>추가·직보 출근</small>
-            <b>{s.ext}회</b>
+            <b>
+              {s.ext}
+              <span className="of"> / {s.plannedExt}회</span>
+            </b>
           </div>
           <div className="hs-panel">
             <small>기타수당</small>
@@ -2769,6 +2778,8 @@ const CSS = `
 .hs-tiles small{font-size:12px;color:var(--sub)}
 .hs-tiles b{font-size:20px;font-family:var(--mono);font-variant-numeric:tabular-nums}
 .hs-tiles b.red{color:var(--danger)}
+.hs-tiles b .of{font-size:.6em;color:var(--sub);font-weight:600}
+.hs-tile-sub{font-size:12px;color:var(--sub);margin-top:2px}
 .hs-warn{text-align:left;background:var(--swap-bg)!important;color:var(--swap);border:1px solid var(--swap-line)!important;border-radius:12px;padding:10px 12px;font-size:13px;font-weight:600}
 .hs-rates{display:grid;grid-template-columns:1fr 1fr;gap:8px;background:var(--mon-bg);border:1px solid var(--mon);border-radius:12px;padding:12px}
 .hs-rates label{font-size:12px;font-weight:600;color:var(--sub);display:flex;flex-direction:column;gap:6px}
@@ -2946,6 +2957,7 @@ const CSS = `
   .hs-slot select,.hs-swaprow select,.hs-person input,.hs-personrates input{font-size:15px}
   .hs-rates label,.hs-personrates label,.hs-grid2 label{font-size:13.5px}
   .hs-tiles small{font-size:14px}
+  .hs-tile-sub{font-size:13.5px}
   .hs-tiles b{font-size:24px}
   .hs-settle{font-size:15px}
   .hs-etcitem{font-size:15px}
