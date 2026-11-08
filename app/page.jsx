@@ -239,6 +239,36 @@ function TextInput({ value, onCommit, placeholder, className = "", type = "text"
   );
 }
 
+// 숫자에 쉼표: "30000" → "30,000" (소수점은 그대로: "3.5" → "3.5")
+function withCommas(v) {
+  const cleaned = String(v ?? "").replace(/[^0-9.]/g, "");
+  if (!cleaned) return "";
+  const [intPart, ...rest] = cleaned.split(".");
+  const intFmt = intPart ? Number(intPart).toLocaleString("ko-KR") : "0";
+  return rest.length ? `${intFmt}.${rest.join("")}` : intFmt;
+}
+
+// 금액 입력칸: 칠 때마다 쉼표가 붙고, 칸을 벗어나거나 Enter 때 숫자만 저장
+function MoneyInput({ value, onCommit, placeholder }) {
+  const [local, setLocal] = useState(withCommas(value));
+  useEffect(() => {
+    setLocal(withCommas(value));
+  }, [value]);
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={local}
+      onChange={(e) => setLocal(withCommas(e.target.value))}
+      onBlur={() => onCommit(local.replace(/,/g, ""))}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+      }}
+      placeholder={placeholder}
+    />
+  );
+}
+
 const Icon = {
   cal: (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -597,7 +627,7 @@ export default function Page() {
     const ext = present.filter((l) => l.type === "extra");
     const items = (allowances[name] || []).filter((a) => a.month === monthKey);
     const rateLabel = (x) => (x ? won(x) : "시급");
-    const classMoney = (n) => (rc ? formatMan(n * HOURS_PER_CLASS * rc) : "(시급 입력)");
+    const classMoney = (n) => (rc ? formatMan(n * HOURS_PER_CLASS * rc) : "(시급 미설정)");
     let total = 0;
     let complete = !!rc || (!reg.length && !ext.length);
     const out = [`[${month}월 급여 정산]`, "", `<${name}>`, ""];
@@ -632,7 +662,7 @@ export default function Page() {
           out.push(`${it.desc} -> ${won(it.amount)}원`);
           total += it.amount;
         } else {
-          out.push(`${it.desc}(${it.hours}H) -> ${re ? formatMan(it.hours * re) : "(시급 입력)"}`);
+          out.push(`${it.desc}(${it.hours}H) -> ${re ? formatMan(it.hours * re) : "(시급 미설정)"}`);
           total += it.hours * (re || 0);
           if (!re) complete = false;
         }
@@ -690,7 +720,6 @@ export default function Page() {
     if ((rates[name]?.[field] || "") === value) return;
     setRates((prev) => ({ ...prev, [name]: { ...(prev[name] || {}), [field]: value } }));
   };
-  const setMyRate = (field, value) => setRateFor(currentAssistant, field, value);
 
   const addAllowance = () => {
     const desc = etcDesc.trim();
@@ -1570,15 +1599,15 @@ export default function Page() {
     const s = buildSettlement(currentAssistant);
     return (
       <>
-        <div className="hs-rates">
-          <label>
-            수업 시급
-            <input type="text" inputMode="numeric" value={myRates.cls || ""} onChange={(e) => setMyRate("cls", e.target.value)} placeholder="(시급) 예: 35000" />
-          </label>
-          <label>
-            기타 시급
-            <input type="text" inputMode="numeric" value={myRates.etc || ""} onChange={(e) => setMyRate("etc", e.target.value)} placeholder="(시급) 예: 30000" />
-          </label>
+        <div className="hs-rates readonly">
+          <div>
+            <small>수업 시급</small>
+            <b>{parseHourlyRate(myRates.cls) ? `${won(parseHourlyRate(myRates.cls))}원` : "미설정"}</b>
+          </div>
+          <div>
+            <small>기타 시급</small>
+            <b>{parseHourlyRate(myRates.etc) ? `${won(parseHourlyRate(myRates.etc))}원` : "미설정"}</b>
+          </div>
         </div>
 
         <div className="hs-tiles three">
@@ -1617,11 +1646,11 @@ export default function Page() {
               type="text"
               inputMode="decimal"
               value={etcVal}
-              onChange={(e) => setEtcVal(e.target.value)}
+              onChange={(e) => setEtcVal(etcMode === "amount" ? withCommas(e.target.value) : e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") addAllowance();
               }}
-              placeholder={etcMode === "hours" ? "시간 (예: 1.5)" : "금액 (예: 31100)"}
+              placeholder={etcMode === "hours" ? "시간 (예: 1.5)" : "금액 (예: 31,100)"}
             />
             <button type="button" className="hs-btn primary" onClick={addAllowance}>
               추가
@@ -2217,11 +2246,11 @@ export default function Page() {
             <div className="hs-personrates">
               <label>
                 수업 시급
-                <TextInput value={rates[n]?.cls || ""} onCommit={(v) => setRateFor(n, "cls", v)} placeholder="(시급)" />
+                <MoneyInput value={rates[n]?.cls || ""} onCommit={(v) => setRateFor(n, "cls", v)} placeholder="(시급) 예: 35,000" />
               </label>
               <label>
                 기타 시급
-                <TextInput value={rates[n]?.etc || ""} onCommit={(v) => setRateFor(n, "etc", v)} placeholder="(시급)" />
+                <MoneyInput value={rates[n]?.etc || ""} onCommit={(v) => setRateFor(n, "etc", v)} placeholder="(시급) 예: 30,000" />
               </label>
             </div>
           </div>
@@ -2744,6 +2773,10 @@ const CSS = `
 .hs-rates{display:grid;grid-template-columns:1fr 1fr;gap:8px;background:var(--mon-bg);border:1px solid var(--mon);border-radius:12px;padding:12px}
 .hs-rates label{font-size:12px;font-weight:600;color:var(--sub);display:flex;flex-direction:column;gap:6px}
 .hs-rates .hs-meta{grid-column:1/-1}
+.hs-rates.readonly{background:var(--surface);border-color:var(--line)}
+.hs-rates.readonly>div{display:flex;flex-direction:column;gap:2px}
+.hs-rates.readonly small{font-size:12px;color:var(--sub);font-weight:600}
+.hs-rates.readonly b{font-size:17px;font-family:var(--mono);font-variant-numeric:tabular-nums}
 .hs-seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
 .hs-seg button{flex:1;padding:10px 0;font-size:13px;font-weight:600;color:var(--sub)}
 .hs-seg button.on{background:var(--accent-soft);color:var(--accent)}
