@@ -6,7 +6,7 @@ import { createClient } from "@supabase/supabase-js";
 const STORAGE_KEY = "hscomet-ta-schedule-v2";
 const LOGIN_TA_KEY = "hscomet-login-ta"; // 이 기기에서 로그인 유지 (조교)
 const LOGIN_ADMIN_KEY = "hscomet-login-admin"; // 이 기기에서 로그인 유지 (관리자)
-const ADMIN_PASSWORD = "hscomet102";
+const ADMIN_PASSWORD = "hscomet102"; // 처음 기본값 (관리 → 관리자 비밀번호에서 변경 가능, DB에 저장)
 const SUPABASE_STATE_ID = "main";
 const SUPABASE_URL_FALLBACK = "https://msdikmalqkhmkwqzbpkm.supabase.co";
 const SUPABASE_ANON_KEY_FALLBACK = "sb_publishable_TmBNhYVTTgcsaeGavMkgeQ_QbIAmlTM";
@@ -289,6 +289,7 @@ export default function Page() {
   );
   const [allowances, setAllowances] = useState({}); // { 이름: [{id, month:"YYYY-MM", desc, hours | amount}] }
   const [rates, setRates] = useState({}); // { 이름: { cls: "35000", etc: "30000" } }
+  const [adminPassword, setAdminPassword] = useState(ADMIN_PASSWORD);
 
   // ── 이 기기 화면 상태 ──
   const [role, setRole] = useState("academy"); // academy(학원) | assistant(조교) | admin(관리자)
@@ -307,6 +308,11 @@ export default function Page() {
   const [loginPw, setLoginPw] = useState("");
   const [loginKeep, setLoginKeep] = useState(true);
   const [loginErr, setLoginErr] = useState("");
+  const [viaAdmin, setViaAdmin] = useState(false); // 관리자가 조교 화면을 보는 중
+  const [taSessionPw, setTaSessionPw] = useState(""); // 이 기기에서 조교가 로그인할 때 쓴 비밀번호
+  const [adminSessionPw, setAdminSessionPw] = useState(""); // 이 기기에서 관리자가 로그인할 때 쓴 비밀번호
+  const [pwNew, setPwNew] = useState("");
+  const [pwConfirm, setPwConfirm] = useState("");
   const [saveStatus, setSaveStatus] = useState(supabase ? "DB 연결 준비 중" : "브라우저 저장 모드");
   const [storageReady, setStorageReady] = useState(false);
   const [swapApprovals, setSwapApprovals] = useState({});
@@ -352,6 +358,7 @@ export default function Page() {
     lessons,
     allowances,
     rates,
+    adminPassword,
   });
 
   const applySavedState = (data) => {
@@ -372,6 +379,7 @@ export default function Page() {
     if (data.lessons) setLessons(data.lessons);
     if (data.allowances) setAllowances(data.allowances);
     if (data.rates) setRates(data.rates);
+    if (data.adminPassword) setAdminPassword(data.adminPassword);
   };
 
   const pushUndo = (label) => {
@@ -464,7 +472,7 @@ export default function Page() {
     }, 400);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storageReady, assistants, assistantPasswords, inactiveAssistants, baseSchedule, enabledWeekdays, lessons, allowances, rates]);
+  }, [storageReady, assistants, assistantPasswords, inactiveAssistants, baseSchedule, enabledWeekdays, lessons, allowances, rates, adminPassword]);
 
   // ── 로그인 유지: 저장된 로그인 정보가 지금 비밀번호와 맞으면 자동 입장 ──
   useEffect(() => {
@@ -474,15 +482,43 @@ export default function Page() {
     if (taOk) {
       setCurrentAssistant(ta.name);
       setAssistantUnlocked(true);
+      setTaSessionPw(ta.pw);
     }
     const ad = readLocal(LOGIN_ADMIN_KEY);
-    const adOk = ad && ad.pw === ADMIN_PASSWORD;
-    if (adOk) setAdminUnlocked(true);
+    const adOk = ad && ad.pw === adminPassword;
+    if (adOk) {
+      setAdminUnlocked(true);
+      setAdminSessionPw(ad.pw);
+    }
     // 로그인해 둔 기기는 그 화면부터, 아니면 학원(보기 전용) 화면
     if (taOk) setRole("assistant");
     else if (adOk) setRole("admin");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageReady]);
+
+  // ── 비밀번호가 바뀌면 그 사람으로 로그인된 모든 기기에서 로그아웃 ──
+  useEffect(() => {
+    if (!storageReady) return;
+    if (assistantUnlocked && !viaAdmin && currentAssistant && assistantPasswords[currentAssistant] !== taSessionPw) {
+      setAssistantUnlocked(false);
+      setCurrentAssistant("");
+      setTaSessionPw("");
+      writeLocal(LOGIN_TA_KEY, null);
+      showToast("비밀번호가 바뀌었어요. 다시 로그인해 주세요");
+    }
+    if (adminUnlocked && adminPassword !== adminSessionPw) {
+      setAdminUnlocked(false);
+      setAdminSessionPw("");
+      writeLocal(LOGIN_ADMIN_KEY, null);
+      if (viaAdmin) {
+        setAssistantUnlocked(false);
+        setCurrentAssistant("");
+        setViaAdmin(false);
+      }
+      showToast("관리자 비밀번호가 바뀌었어요. 다시 로그인해 주세요");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageReady, assistantPasswords, adminPassword, assistantUnlocked, adminUnlocked, currentAssistant, viaAdmin]);
 
   const activeAssistants = useMemo(
     () => assistants.filter((n) => !inactiveAssistants.includes(n)),
@@ -709,8 +745,9 @@ export default function Page() {
   // ── 로그인 ──
   const doLogin = () => {
     if (isAdminRole) {
-      if (loginPw !== ADMIN_PASSWORD) return setLoginErr("비밀번호가 맞지 않아요.");
+      if (loginPw !== adminPassword) return setLoginErr("비밀번호가 맞지 않아요.");
       setAdminUnlocked(true);
+      setAdminSessionPw(loginPw);
       if (loginKeep) writeLocal(LOGIN_ADMIN_KEY, { pw: loginPw });
     } else {
       const expected = assistantPasswords[effectiveLoginName];
@@ -718,6 +755,8 @@ export default function Page() {
       if (loginPw !== expected) return setLoginErr("비밀번호가 맞지 않아요.");
       setCurrentAssistant(effectiveLoginName);
       setAssistantUnlocked(true);
+      setViaAdmin(false);
+      setTaSessionPw(loginPw);
       if (loginKeep) writeLocal(LOGIN_TA_KEY, { name: effectiveLoginName, pw: loginPw });
     }
     setLoginErr("");
@@ -728,11 +767,33 @@ export default function Page() {
     if (isAdminRole) {
       setAdminUnlocked(false);
       writeLocal(LOGIN_ADMIN_KEY, null);
+      if (viaAdmin) {
+        setAssistantUnlocked(false);
+        setCurrentAssistant("");
+        setViaAdmin(false);
+      }
     } else {
       setAssistantUnlocked(false);
       setCurrentAssistant("");
-      writeLocal(LOGIN_TA_KEY, null);
+      if (viaAdmin) setViaAdmin(false);
+      else writeLocal(LOGIN_TA_KEY, null);
     }
+  };
+  // 관리자로 로그인한 상태면 비밀번호 없이 아무 조교 화면이나 볼 수 있음
+  const openAssistantAsAdmin = (name) => {
+    if (!name) return;
+    setCurrentAssistant(name);
+    setAssistantUnlocked(true);
+    setViaAdmin(true);
+  };
+  const changeAdminPassword = () => {
+    const a = pwNew.trim();
+    if (a.length < 4) return showToast("4자 이상으로 입력해 주세요");
+    if (a !== pwConfirm.trim()) return showToast("두 칸의 비밀번호가 달라요");
+    pushUndo("관리자 비밀번호 변경");
+    setAdminPassword(a); // 이 기기를 포함해 관리자로 로그인된 모든 기기가 로그아웃됨
+    setPwNew("");
+    setPwConfirm("");
   };
 
   // ── 관리자: 일정 생성 / 저장 ──
@@ -2238,6 +2299,26 @@ export default function Page() {
       {section("add", "수업 추가 (단일 · 기간)", addLessonForm())}
       {section("base", "기본 일정 (요일별)", baseEditor())}
       {section("people", "조교 관리 · 비밀번호 · 시급", assistantManager())}
+      {section(
+        "adminpw",
+        "관리자 비밀번호",
+        <div className="hs-form">
+          <input type="password" value={pwNew} onChange={(e) => setPwNew(e.target.value)} placeholder="새 비밀번호" autoComplete="new-password" />
+          <input
+            type="password"
+            value={pwConfirm}
+            onChange={(e) => setPwConfirm(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") changeAdminPassword();
+            }}
+            placeholder="새 비밀번호 확인"
+            autoComplete="new-password"
+          />
+          <button type="button" className="hs-btn primary" onClick={changeAdminPassword}>
+            비밀번호 변경
+          </button>
+        </div>
+      )}
       {section("pay", "조교별 정산 · 기타수당", settlementViewer())}
       {section(
         "export",
@@ -2437,6 +2518,7 @@ export default function Page() {
                     setRole("assistant");
                     setLoginErr("");
                     setLoginPw("");
+                    if (adminUnlocked && !assistantUnlocked) openAssistantAsAdmin(loginOptions[0]);
                   }}
                 >
                   조교
@@ -2468,7 +2550,33 @@ export default function Page() {
               </div>
               {authed && !isAcademy && (
                 <div className="hs-who">
-                  {!isAdminRole && <b>{currentAssistant}</b>}
+                  {!isAdminRole &&
+                    (adminUnlocked ? (
+                      <select
+                        className="hs-viewas"
+                        value={currentAssistant}
+                        onChange={(e) => openAssistantAsAdmin(e.target.value)}
+                        aria-label="볼 조교 선택"
+                      >
+                        {loginOptions.map((n) => (
+                          <option key={n} value={n}>
+                            {n}
+                          </option>
+                        ))}
+                        {inactiveAssistants.length > 0 && (
+                          <optgroup label="퇴직 조교">
+                            {inactiveAssistants.map((n) => (
+                              <option key={n} value={n}>
+                                {n}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {currentAssistant && !assistants.includes(currentAssistant) && <option value={currentAssistant}>{currentAssistant}</option>}
+                      </select>
+                    ) : (
+                      <b>{currentAssistant}</b>
+                    ))}
                   {isAdminRole && (
                     <button
                       type="button"
@@ -2570,6 +2678,7 @@ const CSS = `
 .hs-who b{background:var(--accent-soft);color:var(--accent);font-size:13px;border-radius:999px;padding:5px 10px}
 .hs-who .hs-undo{color:var(--accent);border-color:var(--accent)!important;font-weight:700}
 .hs-who .hs-undo:disabled{color:var(--faint);border-color:var(--line)!important}
+.hs-root .hs-viewas{width:auto;padding:5px 26px 5px 10px;border-radius:999px;font-size:13px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-color:transparent}
 .hs-who button{border:1px solid var(--line);background:var(--surface);font-size:12px;color:var(--sub);border-radius:999px;padding:5px 9px}
 .hs-main{padding:14px 14px 104px;display:flex;flex-direction:column;gap:10px}
 .hs-next{background:var(--accent);color:var(--accent-ink);border-radius:16px;padding:14px 16px}
@@ -2780,7 +2889,7 @@ const CSS = `
   .hs-role button{font-size:14px;padding:6px 12px}
   .hs-month b{font-size:17px}
   .hs-month button{width:32px;height:32px;font-size:16px}
-  .hs-who b,.hs-who button{font-size:14px}
+  .hs-who b,.hs-who button,.hs-root .hs-viewas{font-size:14px}
   .hs-next small,.hs-next .row{font-size:14px}
   .hs-next .big{font-size:22px}
   .hs-today{font-size:15px}
