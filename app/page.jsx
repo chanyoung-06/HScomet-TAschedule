@@ -2246,11 +2246,11 @@ export default function Page() {
             <div className="hs-personrates">
               <label>
                 수업 시급
-                <MoneyInput value={rates[n]?.cls || ""} onCommit={(v) => setRateFor(n, "cls", v)} placeholder="(시급) 예: 35,000" />
+                <MoneyInput value={rates[n]?.cls || ""} onCommit={(v) => setRateFor(n, "cls", v)} placeholder="시급" />
               </label>
               <label>
                 기타 시급
-                <MoneyInput value={rates[n]?.etc || ""} onCommit={(v) => setRateFor(n, "etc", v)} placeholder="(시급) 예: 30,000" />
+                <MoneyInput value={rates[n]?.etc || ""} onCommit={(v) => setRateFor(n, "etc", v)} placeholder="시급" />
               </label>
             </div>
           </div>
