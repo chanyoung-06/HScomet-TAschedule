@@ -2745,8 +2745,8 @@ const CSS = `
 .hs-bc.w0 .bn{color:var(--sun)} .hs-bc.w6 .bn{color:var(--sat)}
 .hs-bc.today .bn{align-self:flex-start;background:var(--accent);color:var(--accent-ink);border-radius:999px;padding:0 7px}
 .hs-bl{background:var(--cb);border-left:3px solid var(--c);border-radius:6px;padding:4px 6px;font-size:11.5px;line-height:1.35;min-width:0}
-.hs-bl .bt{display:flex;align-items:center;gap:4px}
-.hs-bl .bt b{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
+.hs-bl .bt{display:flex;align-items:center;flex-wrap:wrap;gap:0 4px}
+.hs-bl .bt b{font-size:12px;flex:1 1 auto;min-width:0;overflow-wrap:anywhere;word-break:keep-all}
 .hs-bl .k{color:var(--etc);font-weight:700;font-size:10.5px;flex-shrink:0}
 .hs-bl .btm{color:var(--sub);font-family:var(--mono);font-size:10.5px}
 .hs-bl .bp{display:flex;flex-wrap:wrap;gap:0 5px;overflow-wrap:anywhere}
@@ -2769,6 +2769,63 @@ const CSS = `
   .hs-big{display:block;height:100%;overflow-y:auto;padding:24px 28px}
   .hs-smallcal{display:none}
   .hs-toast{left:220px}
+}
+/* 웹(넓은 화면)에서는 글씨를 한 단계 크게 */
+@media (min-width:1000px){
+  .hs-root{font-size:15.5px}
+  .hs-shell{grid-template-columns:500px minmax(0,1fr)}
+  .hs-brand{font-size:13.5px}
+  .hs-head h1{font-size:23px}
+  .hs-logo{width:46px;height:46px}
+  .hs-role button{font-size:14px;padding:6px 12px}
+  .hs-month b{font-size:17px}
+  .hs-month button{width:32px;height:32px;font-size:16px}
+  .hs-who b,.hs-who button{font-size:14px}
+  .hs-next small,.hs-next .row{font-size:14px}
+  .hs-next .big{font-size:22px}
+  .hs-today{font-size:15px}
+  .hs-today .t{font-size:13.5px}
+  .hs-sec{font-size:14px}
+  .hs-date{width:46px}
+  .hs-date .d{font-size:22px}
+  .hs-date .w{font-size:13px}
+  .hs-card{padding:12px 14px}
+  .hs-card-t b{font-size:16.5px}
+  .hs-time{font-size:14px}
+  .hs-chip{font-size:14px;padding:4px 10px}
+  .hs-tag{font-size:12.5px}
+  .hs-att button,.hs-act{font-size:15px;padding:10px}
+  .hs-panel h3{font-size:16.5px}
+  .hs-meta{font-size:14px}
+  .hs-empty{font-size:15px}
+  .hs-btn{font-size:15.5px;padding:11px 14px}
+  .hs-seg button{font-size:15px}
+  .hs-root select,.hs-root input[type=text],.hs-root input[type=password],.hs-root input[type=date],.hs-root input[type=time],.hs-root input:not([type]){font-size:16px}
+  .hs-slot select,.hs-swaprow select,.hs-person input,.hs-personrates input{font-size:15px}
+  .hs-rates label,.hs-personrates label,.hs-grid2 label{font-size:13.5px}
+  .hs-tiles small{font-size:14px}
+  .hs-tiles b{font-size:24px}
+  .hs-settle{font-size:15px}
+  .hs-etcitem{font-size:15px}
+  .hs-etcitem .v{font-size:13.5px}
+  .hs-acc-h{font-size:16.5px;padding:16px}
+  .hs-statrow{grid-template-columns:76px 1fr 36px;font-size:15px}
+  .hs-sub{font-size:13px}
+  .hs-legend,.hs-calnote{font-size:13px}
+  .hs-card-actions button,.hs-mini-actions button,.hs-person button{font-size:13.5px}
+  .hs-swapbox{font-size:14px}
+  .hs-nav button{font-size:13px}
+  .hs-nav svg{width:25px;height:25px}
+  .hs-toast{font-size:15px;left:250px}
+  .hs-bighead h2{font-size:30px}
+  .hs-bighead .hs-meta{font-size:15px}
+  .hs-bwk{font-size:15px;padding:10px 0}
+  .hs-bc{min-height:150px;padding:8px;gap:5px}
+  .hs-bc .bn{font-size:16px}
+  .hs-bl{font-size:13.5px;padding:5px 8px}
+  .hs-bl .bt b{font-size:14.5px}
+  .hs-bl .k{font-size:12px}
+  .hs-bl .btm{font-size:12.5px}
 }
 @media (prefers-reduced-motion:no-preference){.hs-att button,.hs-seg button{transition:background .12s,color .12s}}
 `;
