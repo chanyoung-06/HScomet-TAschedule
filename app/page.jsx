@@ -125,6 +125,20 @@ function md(key) {
 function prettyDate(key) {
   return `${md(key)}(${days[dowOf(key)]})`;
 }
+const EVENT_COLORS = [
+  { key: "slate", label: "회색" },
+  { key: "teal", label: "청록" },
+  { key: "orange", label: "주황" },
+  { key: "pink", label: "분홍" },
+  { key: "brown", label: "갈색" },
+];
+function lastDayOfMonthKey(key) {
+  const d = new Date(`${key}T00:00:00`);
+  return dateKey(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+}
+function eventRange(e) {
+  return e.start === e.end ? md(e.start) : `${md(e.start)}–${md(e.end)}`;
+}
 function getMonthDates(year, month) {
   const first = new Date(year, month - 1, 1);
   const start = new Date(first);
@@ -318,6 +332,7 @@ export default function Page() {
     generateMonthLessons(today.getFullYear(), today.getMonth() + 1, defaultBaseSchedule)
   );
   const [allowances, setAllowances] = useState({}); // { 이름: [{id, month:"YYYY-MM", desc, hours | amount}] }
+  const [events, setEvents] = useState([]); // 수업 아닌 일정 [{id, title, start:"YYYY-MM-DD", end, color}]
   const [rates, setRates] = useState({}); // { 이름: { cls: "35000", etc: "30000" } }
   const [adminPassword, setAdminPassword] = useState(ADMIN_PASSWORD);
 
@@ -343,6 +358,10 @@ export default function Page() {
   const [adminSessionPw, setAdminSessionPw] = useState(""); // 이 기기에서 관리자가 로그인할 때 쓴 비밀번호
   const [pwNew, setPwNew] = useState("");
   const [pwConfirm, setPwConfirm] = useState("");
+  const [bulkUntil, setBulkUntil] = useState(() => {
+    const d = new Date(today.getFullYear(), today.getMonth(), 0); // 지난달 말일
+    return dateKey(d);
+  });
   const [saveStatus, setSaveStatus] = useState(supabase ? "DB 연결 준비 중" : "브라우저 저장 모드");
   const [storageReady, setStorageReady] = useState(false);
   const [swapApprovals, setSwapApprovals] = useState({});
@@ -357,17 +376,17 @@ export default function Page() {
   const [newAssistantPassword, setNewAssistantPassword] = useState("");
   const [extra, setExtra] = useState({
     date: todayKey,
-    startDate: todayKey,
-    endDate: todayKey,
     weekdays: [today.getDay()],
-    dateMode: "single",
-    title: "한성 34기",
+    repeat: "none",
+    until: dateKey(new Date(today.getFullYear(), today.getMonth() + 1, 0)),
+    title: "",
     kind: "추가",
     start: "10:00",
     end: "13:00",
     assistants: [NO_PERSON, NO_PERSON],
     type: "extra",
   });
+  const [evForm, setEvForm] = useState({ title: "", start: todayKey, end: todayKey, color: "slate" });
   const [undoStack, setUndoStack] = useState([]);
   const remoteUpdateRef = useRef(false);
   const toastTimer = useRef(null);
@@ -387,6 +406,7 @@ export default function Page() {
     enabledWeekdays,
     lessons,
     allowances,
+    events,
     rates,
     adminPassword,
   });
@@ -408,6 +428,7 @@ export default function Page() {
     }
     if (data.lessons) setLessons(data.lessons);
     if (data.allowances) setAllowances(data.allowances);
+    setEvents(Array.isArray(data.events) ? data.events : []);
     if (data.rates) setRates(data.rates);
     if (data.adminPassword) setAdminPassword(data.adminPassword);
   };
@@ -502,7 +523,7 @@ export default function Page() {
     }, 400);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storageReady, assistants, assistantPasswords, inactiveAssistants, baseSchedule, enabledWeekdays, lessons, allowances, rates, adminPassword]);
+  }, [storageReady, assistants, assistantPasswords, inactiveAssistants, baseSchedule, enabledWeekdays, lessons, allowances, events, rates, adminPassword]);
 
   // ── 로그인 유지: 저장된 로그인 정보가 지금 비밀번호와 맞으면 자동 입장 ──
   useEffect(() => {
@@ -575,6 +596,12 @@ export default function Page() {
     () => (filterName === "전체" ? monthLessons : monthLessons.filter((l) => l.assistants.includes(filterName))),
     [monthLessons, filterName]
   );
+  const monthEvents = useMemo(() => {
+    const first = `${monthPrefix}01`;
+    const last = `${monthPrefix}${pad(new Date(year, month, 0).getDate())}`;
+    return events.filter((e) => e.start <= last && e.end >= first).sort((a, b) => a.start.localeCompare(b.start));
+  }, [events, monthPrefix, year, month]);
+  const eventsOn = (ds) => monthEvents.filter((e) => e.start <= ds && e.end >= ds);
   const pendingSwaps = useMemo(() => {
     const list = [];
     lessons.forEach((l) => (l.swapRequests || []).forEach((requester) => list.push({ lesson: l, requester })));
@@ -818,6 +845,40 @@ export default function Page() {
     setAssistantUnlocked(true);
     setViaAdmin(true);
   };
+  // 지정한 날짜까지의 수업에서, 체크 안 된 배정 조교를 모두 '출근'으로 (결근 체크는 그대로)
+  const countBulkTargets = (until) => {
+    let n = 0;
+    lessons.forEach((l) => {
+      if (l.date > until) return;
+      l.assistants.forEach((name) => {
+        if (name && name !== NO_PERSON && !l.attendance?.[name]) n += 1;
+      });
+    });
+    return n;
+  };
+  const bulkMarkPresent = () => {
+    if (!bulkUntil) return showToast("날짜를 골라 주세요");
+    const n = countBulkTargets(bulkUntil);
+    if (!n) return showToast("출근 처리할 수업이 없어요");
+    if (!window.confirm(`${prettyDate(bulkUntil)}까지 체크 안 된 ${n}건을 모두 출근으로 처리할까요?\n(결근으로 체크된 건 그대로 둬요)`)) return;
+    pushUndo("출근 일괄 처리");
+    setLessons((prev) =>
+      prev.map((l) => {
+        if (l.date > bulkUntil) return l;
+        const att = { ...(l.attendance || {}) };
+        let changed = false;
+        l.assistants.forEach((name) => {
+          if (name && name !== NO_PERSON && !att[name]) {
+            att[name] = "present";
+            changed = true;
+          }
+        });
+        return changed ? { ...l, attendance: att } : l;
+      })
+    );
+    showToast(`${n}건을 출근으로 처리했어요`);
+  };
+
   const changeAdminPassword = () => {
     const a = pwNew.trim();
     if (a.length < 4) return showToast("4자 이상으로 입력해 주세요");
@@ -1020,13 +1081,19 @@ export default function Page() {
 
   const addExtraLesson = () => {
     const isReg = extra.type === "regular";
+    if (!extra.title.trim()) return window.alert("수업명을 입력해 주세요.");
     const targetDates = [];
-    if (extra.dateMode === "range") {
-      const start = new Date(`${extra.startDate}T00:00:00`);
-      const end = new Date(`${extra.endDate}T00:00:00`);
+    if (extra.repeat !== "none") {
+      const start = new Date(`${extra.date}T00:00:00`);
+      const end = new Date(`${extra.until}T00:00:00`);
       if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return window.alert("날짜가 올바르지 않습니다.");
-      if (start.getTime() > end.getTime()) return window.alert("종료 날짜가 시작 날짜보다 빠릅니다.");
-      const wds = extra.weekdays.length ? extra.weekdays : [start.getDay()];
+      if (start.getTime() > end.getTime()) return window.alert("반복 종료일이 시작 날짜보다 빠릅니다.");
+      const wds =
+        extra.repeat === "daily"
+          ? [0, 1, 2, 3, 4, 5, 6]
+          : extra.repeat === "custom" && extra.weekdays.length
+            ? extra.weekdays
+            : [start.getDay()];
       const cursor = new Date(start);
       let safety = 0;
       while (cursor.getTime() <= end.getTime() && safety < 500) {
@@ -1056,6 +1123,24 @@ export default function Page() {
     ]);
     setExtra({ ...extra, assistants: [NO_PERSON, NO_PERSON] });
     showToast(`${targetDates.length}개 수업을 등록했어요`);
+  };
+
+  // ── 일정(수업 아님) ──
+  const addEvent = () => {
+    const title = evForm.title.trim();
+    if (!title) return window.alert("일정 이름을 입력해 주세요.");
+    const start = evForm.start;
+    const end = evForm.end && evForm.end >= start ? evForm.end : start;
+    pushUndo("일정 추가");
+    setEvents((prev) => [...prev, { id: `ev-${Date.now()}`, title, start, end, color: evForm.color }]);
+    setEvForm({ ...evForm, title: "" });
+    showToast("일정을 추가했어요");
+  };
+  const deleteEvent = (id) => {
+    if (!window.confirm("이 일정을 삭제할까요?")) return;
+    pushUndo("일정 삭제");
+    setEvents((prev) => prev.filter((e) => e.id !== id));
+    showToast("일정을 삭제했어요");
   };
 
   // ── 기본 일정(요일별) 편집 ──
@@ -1530,6 +1615,12 @@ export default function Page() {
             </span>
           </div>
         </div>
+        {monthEvents.length > 0 && (
+          <>
+            <div className="hs-sec">{month}월 학원 일정</div>
+            {eventChips(monthEvents)}
+          </>
+        )}
         <div className="hs-sec">남은 일정</div>
         {upcoming.length ? byDateList(upcoming, taCard) : <div className="hs-panel hs-empty">남은 출근이 없어요.</div>}
         {past.length > 0 && (
@@ -1715,6 +1806,11 @@ export default function Page() {
           aria-label={`${month}월 ${d}일 수업 ${ls.length}개`}
         >
           <span className="n">{d}</span>
+          {eventsOn(ds).map((e) => (
+            <i key={e.id} className={`evbar ev-${e.color} ${e.start === ds || d === 1 ? "s" : ""} ${e.end === ds ? "e" : ""}`}>
+              {e.start === ds || w === 0 || d === 1 ? e.title : "\u00a0"}
+            </i>
+          ))}
           {ls.slice(0, 3).map((l) => (
             <i key={l.id} className={`mini ${lessonTone(l)}`}>
               {gisu(l.title)}
@@ -1798,13 +1894,17 @@ export default function Page() {
           </div>
         )}
         {schedView === "list" ? (
-          byDateList(adminLessons, adminCard)
+          <>
+            {eventChips(monthEvents)}
+            {byDateList(adminLessons, adminCard)}
+          </>
         ) : (
           <>
             {smallCalendar()}
             <div className="hs-sec">
               {prettyDate(selDay)} 수업 {sel.length}개
             </div>
+            {eventChips(eventsOn(selDay))}
             {sel.length ? <div className="hs-cards">{sel.map(adminCard)}</div> : <div className="hs-panel hs-empty">이날은 수업이 없어요.</div>}
           </>
         )}
@@ -1880,6 +1980,7 @@ export default function Page() {
             </button>
           </div>
         </div>
+        {schedView === "list" && eventChips(monthEvents)}
         {schedView === "list" ? (
           monthLessons.length ? (
             byDateList(monthLessons, viewCard)
@@ -1892,6 +1993,7 @@ export default function Page() {
             <div className="hs-sec">
               {prettyDate(selDay)} 수업 {sel.length}개
             </div>
+            {eventChips(eventsOn(selDay))}
             {sel.length ? <div className="hs-cards">{sel.map(viewCard)}</div> : <div className="hs-panel hs-empty">이날은 수업이 없어요.</div>}
           </>
         )}
@@ -2018,6 +2120,76 @@ export default function Page() {
     );
   };
 
+  const addEventForm = () => {
+    const upcoming = events.filter((e) => e.end >= todayKey).sort((x, y) => x.start.localeCompare(y.start));
+    const pastCount = events.length - upcoming.length;
+    return (
+      <div className="hs-form">
+        <TextInput value={evForm.title} onCommit={(v) => setEvForm({ ...evForm, title: v })} placeholder="일정 이름" />
+        <div className="hs-grid2">
+          <label>
+            시작
+            <input
+              type="date"
+              value={evForm.start}
+              onChange={(e) => {
+                const v = e.target.value;
+                setEvForm({ ...evForm, start: v, end: evForm.end < v ? v : evForm.end });
+              }}
+            />
+          </label>
+          <label>
+            종료
+            <input type="date" value={evForm.end} min={evForm.start} onChange={(e) => setEvForm({ ...evForm, end: e.target.value })} />
+          </label>
+        </div>
+        <div className="hs-swatches" role="group" aria-label="색">
+          {EVENT_COLORS.map((c) => (
+            <button
+              key={c.key}
+              type="button"
+              className={`ev-${c.key} ${evForm.color === c.key ? "on" : ""}`}
+              onClick={() => setEvForm({ ...evForm, color: c.key })}
+              aria-label={c.label}
+              title={c.label}
+            />
+          ))}
+        </div>
+        <button type="button" className="hs-btn primary" onClick={addEvent}>
+          일정 추가
+        </button>
+        {upcoming.length > 0 && (
+          <div className="hs-evlist">
+            {upcoming.map((e) => (
+              <div key={e.id} className={`hs-evrow ev-${e.color}`}>
+                <i />
+                <b>{e.title}</b>
+                <span>{eventRange(e)}</span>
+                <button type="button" onClick={() => deleteEvent(e.id)} aria-label="삭제">
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {pastCount > 0 && <p className="hs-meta">지난 일정 {pastCount}개는 캘린더에서 볼 수 있어요</p>}
+      </div>
+    );
+  };
+
+  // 선택한 날 / 이번 달 일정 띠
+  const eventChips = (list) =>
+    list.length > 0 && (
+      <div className="hs-evchips">
+        {list.map((e) => (
+          <span key={e.id} className={`hs-evchip ev-${e.color}`}>
+            <b>{e.title}</b>
+            <span>{eventRange(e)}</span>
+          </span>
+        ))}
+      </div>
+    );
+
   const section = (key, title, body) => (
     <div className={`hs-acc ${openSection === key ? "open" : ""}`}>
       <button type="button" className="hs-acc-h" onClick={() => setOpenSection(openSection === key ? "" : key)}>
@@ -2028,95 +2200,75 @@ export default function Page() {
     </div>
   );
 
-  const addLessonForm = () => (
+  const addLessonForm = () => {
+    const cat = extra.type === "regular" ? "정규" : extra.kind;
+    const setCat = (c) => setExtra({ ...extra, type: c === "정규" ? "regular" : "extra", kind: c === "정규" ? extra.kind : c });
+    const dow = days[dowOf(extra.date)];
+    return (
     <div className="hs-form">
       <div className="hs-seg" role="group" aria-label="수업 종류">
-        <button type="button" className={extra.type === "extra" ? "on" : ""} onClick={() => setExtra({ ...extra, type: "extra" })}>
-          추가 / 직보
-        </button>
-        <button type="button" className={extra.type === "regular" ? "on" : ""} onClick={() => setExtra({ ...extra, type: "regular" })}>
-          정규 (단일)
-        </button>
-      </div>
-      {extra.type === "extra" && (
-        <div className="hs-seg" role="group" aria-label="추가 구분">
-          <button type="button" className={extra.kind === "추가" ? "on" : ""} onClick={() => setExtra({ ...extra, kind: "추가" })}>
-            추가
+        {["정규", "추가", "직보"].map((c) => (
+          <button key={c} type="button" className={cat === c ? "on" : ""} onClick={() => setCat(c)}>
+            {c}
           </button>
-          <button type="button" className={extra.kind === "직보" ? "on" : ""} onClick={() => setExtra({ ...extra, kind: "직보" })}>
-            직보
-          </button>
-        </div>
-      )}
-      <div className="hs-seg" role="group" aria-label="날짜 방식">
-        <button type="button" className={extra.dateMode === "single" ? "on" : ""} onClick={() => setExtra({ ...extra, dateMode: "single" })}>
-          단일 날짜
-        </button>
-        <button
-          type="button"
-          className={extra.dateMode === "range" ? "on" : ""}
-          onClick={() =>
-            setExtra({
-              ...extra,
-              dateMode: "range",
-              startDate: extra.startDate || extra.date,
-              endDate: extra.endDate || extra.date,
-              weekdays: extra.weekdays && extra.weekdays.length ? extra.weekdays : [dowOf(extra.date)],
-            })
-          }
-        >
-          기간 반복
-        </button>
+        ))}
       </div>
-      {extra.dateMode === "single" ? (
-        <input type="date" value={extra.date} onChange={(e) => setExtra({ ...extra, date: e.target.value })} />
-      ) : (
-        <>
-          <div className="hs-grid2">
-            <label>
-              시작 날짜
-              <input type="date" value={extra.startDate} onChange={(e) => setExtra({ ...extra, startDate: e.target.value })} />
-            </label>
-            <label>
-              종료 날짜
-              <input type="date" value={extra.endDate} onChange={(e) => setExtra({ ...extra, endDate: e.target.value })} />
-            </label>
-          </div>
-          <div className="hs-wdpick">
-            {sortWeekdays([0, 1, 2, 3, 4, 5, 6]).map((d) => {
-              const on = extra.weekdays.includes(d);
-              return (
-                <button
-                  key={d}
-                  type="button"
-                  className={on ? "on" : ""}
-                  onClick={() => setExtra({ ...extra, weekdays: on ? extra.weekdays.filter((x) => x !== d) : [...extra.weekdays, d] })}
-                >
-                  {days[d]}
-                </button>
-              );
-            })}
-          </div>
-        </>
-      )}
-      <TextInput value={extra.title} onCommit={(v) => setExtra({ ...extra, title: v })} placeholder="수업명 예: 한성 34기" />
-      <div className="hs-grid2">
-        <label>
-          시작
+      <TextInput value={extra.title} onCommit={(v) => setExtra({ ...extra, title: v })} placeholder="수업명" />
+      <div className="hs-when">
+        <input type="date" value={extra.date} onChange={(e) => setExtra({ ...extra, date: e.target.value })} aria-label="날짜" />
+        <div className="hs-when-t">
           <input
             type="time"
             value={extra.start}
+            aria-label="시작"
             onChange={(e) => {
               const v = e.target.value;
               setExtra({ ...extra, start: v, end: addHoursToTime(v, 3) || extra.end });
             }}
           />
-        </label>
-        <label>
-          종료
-          <input type="time" value={extra.end} onChange={(e) => setExtra({ ...extra, end: e.target.value })} />
-        </label>
+          <span>–</span>
+          <input type="time" value={extra.end} aria-label="종료" onChange={(e) => setExtra({ ...extra, end: e.target.value })} />
+        </div>
       </div>
+      <select
+        className="hs-repeat"
+        value={extra.repeat}
+        aria-label="반복"
+        onChange={(e) => {
+          const r = e.target.value;
+          const until = extra.until && extra.until >= extra.date ? extra.until : lastDayOfMonthKey(extra.date);
+          const weekdays = r === "custom" && !extra.weekdays.length ? [dowOf(extra.date)] : extra.weekdays;
+          setExtra({ ...extra, repeat: r, until, weekdays });
+        }}
+      >
+        <option value="none">반복 안 함</option>
+        <option value="weekly">매주 {dow}요일</option>
+        <option value="daily">매일</option>
+        <option value="custom">요일 선택</option>
+      </select>
+      {extra.repeat === "custom" && (
+        <div className="hs-wdpick">
+          {sortWeekdays([0, 1, 2, 3, 4, 5, 6]).map((d) => {
+            const on = extra.weekdays.includes(d);
+            return (
+              <button
+                key={d}
+                type="button"
+                className={on ? "on" : ""}
+                onClick={() => setExtra({ ...extra, weekdays: on ? extra.weekdays.filter((x) => x !== d) : [...extra.weekdays, d] })}
+              >
+                {days[d]}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {extra.repeat !== "none" && (
+        <label className="hs-field">
+          반복 종료일
+          <input type="date" value={extra.until} min={extra.date} onChange={(e) => setExtra({ ...extra, until: e.target.value })} />
+        </label>
+      )}
       <div className="hs-edit">
         {extra.assistants.map((name, index) => (
           <AssistantSlot
@@ -2140,10 +2292,11 @@ export default function Page() {
       </button>
       <button type="button" className="hs-btn primary" onClick={addExtraLesson}>
         {extra.type === "regular" ? "정규 수업 등록" : `${extra.kind} 수업 등록`}
-        {extra.dateMode === "range" ? " (기간)" : ""}
+        {extra.repeat !== "none" ? " (반복)" : ""}
       </button>
     </div>
-  );
+    );
+  };
 
   const availableToAdd = [1, 2, 3, 4, 5].filter((d) => !enabledWeekdays.includes(d));
   const baseEditor = () => (
@@ -2334,7 +2487,8 @@ export default function Page() {
         </button>
         <p className="hs-meta">저장 상태: {saveStatus}</p>
       </div>
-      {section("add", "수업 추가 (단일 · 기간)", addLessonForm())}
+      {section("add", "수업 추가", addLessonForm())}
+      {section("event", "일정 추가", addEventForm())}
       {section("base", "기본 일정 (요일별)", baseEditor())}
       {section("people", "조교 관리 · 비밀번호 · 시급", assistantManager())}
       {section(
@@ -2354,6 +2508,20 @@ export default function Page() {
           />
           <button type="button" className="hs-btn primary" onClick={changeAdminPassword}>
             비밀번호 변경
+          </button>
+        </div>
+      )}
+      {section(
+        "bulk",
+        "출근 일괄 처리",
+        <div className="hs-form">
+          <label className="hs-field">
+            이 날짜까지의 수업
+            <input type="date" value={bulkUntil} onChange={(e) => setBulkUntil(e.target.value)} />
+          </label>
+          <p className="hs-meta">체크 안 된 {countBulkTargets(bulkUntil)}건 · 결근 체크는 그대로 둬요</p>
+          <button type="button" className="hs-btn primary" onClick={bulkMarkPresent}>
+            모두 출근 처리
           </button>
         </div>
       )}
@@ -2420,6 +2588,11 @@ export default function Page() {
           }
         >
           <div className="bn">{d}</div>
+          {eventsOn(ds).map((e) => (
+            <div key={e.id} className={`hs-bev ev-${e.color}`}>
+              {e.title}
+            </div>
+          ))}
           {ls.map((l) => (
             <div key={l.id} className={`hs-bl ${lessonTone(l)}`}>
               <div className="bt">
@@ -2837,6 +3010,29 @@ const CSS = `
 .hs-cc .more{font-style:normal;font-size:10px;color:var(--faint)}
 .hs-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--swap);flex-shrink:0}
 .hs-cc .hs-dot{position:absolute;top:4px;right:4px}
+.ev-slate{--ec:#64748b;--eb:#eef1f5} .ev-teal{--ec:#0f9488;--eb:#e2f6f3} .ev-orange{--ec:#ea6a0c;--eb:#fff0e3}
+.ev-pink{--ec:#db2777;--eb:#fde9f2} .ev-brown{--ec:#8a5a2b;--eb:#f5ece2}
+@media (prefers-color-scheme: dark){ .ev-slate{--ec:#a3b1c4;--eb:#232a35} .ev-teal{--ec:#2dd4bf;--eb:#12302c}
+ .ev-orange{--ec:#fb923c;--eb:#33210f} .ev-pink{--ec:#f472b6;--eb:#33172a} .ev-brown{--ec:#d2a679;--eb:#2e2318} }
+.hs-cc .evbar{font-style:normal;font-size:9.5px;font-weight:700;line-height:13px;align-self:stretch;margin:0 -3px;padding:0 3px;background:var(--ec);color:#fff;white-space:nowrap;overflow:hidden;text-overflow:clip}
+.hs-cc .evbar.s{margin-left:0;border-top-left-radius:4px;border-bottom-left-radius:4px}
+.hs-cc .evbar.e{margin-right:0;border-top-right-radius:4px;border-bottom-right-radius:4px}
+.hs-bev{background:var(--ec);color:#fff;font-size:11.5px;font-weight:700;border-radius:5px;padding:2px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hs-evchips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.hs-evchip{display:inline-flex;align-items:center;gap:6px;background:var(--eb);color:var(--ec);border:1px solid var(--ec);border-radius:999px;padding:3px 10px;font-size:12.5px}
+.hs-evchip span{font-family:var(--mono);font-size:11.5px;opacity:.85}
+.hs-when{display:flex;flex-direction:column;gap:8px}
+.hs-when-t{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:6px}
+.hs-when-t span{color:var(--sub)}
+.hs-swatches{display:flex;gap:10px}
+.hs-swatches button{width:30px;height:30px;border-radius:50%;background:var(--ec);border:3px solid var(--surface);box-shadow:0 0 0 1px var(--line);padding:0}
+.hs-swatches button.on{box-shadow:0 0 0 2px var(--ink)}
+.hs-evlist{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.hs-evrow{display:flex;align-items:center;gap:8px;background:var(--eb);border-radius:10px;padding:8px 10px;font-size:13px}
+.hs-evrow i{width:8px;height:8px;border-radius:50%;background:var(--ec);flex-shrink:0}
+.hs-evrow b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hs-evrow span{font-family:var(--mono);font-size:12px;color:var(--sub)}
+.hs-evrow button{border:0;background:none;color:var(--sub);font-size:18px;line-height:1;padding:0 4px;cursor:pointer}
 .hs-calnote{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--sub);margin-top:8px;padding-left:4px}
 .hs-calnote .hs-dot{margin-right:4px;vertical-align:1px}
 .hs-statrow{display:grid;grid-template-columns:64px 1fr 32px;align-items:center;gap:4px 8px;padding:8px 0;border-bottom:1px solid var(--line)}
@@ -2857,6 +3053,7 @@ const CSS = `
 .hs-acc-b{padding:0 14px 14px;border-top:1px solid var(--line)}
 .hs-form{display:flex;flex-direction:column;gap:8px;padding-top:12px}
 .hs-grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.hs-field{font-size:12px;color:var(--sub);display:flex;flex-direction:column;gap:4px}
 .hs-grid2 label{font-size:12px;color:var(--sub);display:flex;flex-direction:column;gap:4px}
 .hs-wdpick{display:flex;flex-wrap:wrap;gap:4px}
 .hs-wdpick button{width:38px;height:36px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font-weight:700;color:var(--sub)}
@@ -2955,7 +3152,7 @@ const CSS = `
   .hs-seg button{font-size:15px}
   .hs-root select,.hs-root input[type=text],.hs-root input[type=password],.hs-root input[type=date],.hs-root input[type=time],.hs-root input:not([type]){font-size:16px}
   .hs-slot select,.hs-swaprow select,.hs-person input,.hs-personrates input{font-size:15px}
-  .hs-rates label,.hs-personrates label,.hs-grid2 label{font-size:13.5px}
+  .hs-rates label,.hs-personrates label,.hs-grid2 label,.hs-field{font-size:13.5px}
   .hs-tiles small{font-size:14px}
   .hs-tile-sub{font-size:13.5px}
   .hs-tiles b{font-size:24px}
@@ -2976,6 +3173,9 @@ const CSS = `
   .hs-bwk{font-size:15px;padding:10px 0}
   .hs-bc{min-height:150px;padding:8px;gap:5px}
   .hs-bc .bn{font-size:16px}
+  .hs-bev{font-size:13.5px;padding:3px 8px}
+  .hs-evchip{font-size:14px}
+  .hs-evrow{font-size:15px}
   .hs-bl{font-size:13.5px;padding:5px 8px}
   .hs-bl .bt b{font-size:14.5px}
   .hs-bl .k{font-size:12px}
