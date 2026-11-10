@@ -87,8 +87,13 @@ const kindOf = (l) => (l.type !== "extra" ? "" : l.kind || (/직보/.test(l.titl
 // 수업명에서 기수 숫자만: "한성 34기" → "34"
 const gisu = (title) => {
   const m = String(title || "").match(/(\d+)\s*기/);
-  return m ? m[1] : String(title || "").replace(/^(한성|세종|심층)\s*/, "").trim();
+  if (m) return m[1];
+  const t = String(title || "").trim();
+  return t.replace(/^(한성|세종)\s*/, "").trim() || t; // "심층" 같은 이름은 그대로
 };
+// 정산 표기: 숫자면 "33기", 아니면 이름 그대로 ("심층")
+const gisuLabel = (k) => (/^\d+$/.test(k) ? `${k}기` : k);
+const gisuOrder = (k) => (/^\d+$/.test(k) ? parseInt(k, 10) : -1);
 
 // "HH:MM" + h시간 → "HH:MM" (자정을 넘으면 23:59로 제한)
 function addHoursToTime(t, h) {
@@ -713,15 +718,15 @@ export default function Page() {
       reg.forEach((l) => (c[gisu(l.title)] = (c[gisu(l.title)] || 0) + 1));
       out.push(`*정규수업(${rateLabel(rc)})`);
       Object.keys(c)
-        .sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0))
-        .forEach((k) => out.push(`${k}기- ${c[k]}회`));
+        .sort((a, b) => gisuOrder(b) - gisuOrder(a))
+        .forEach((k) => out.push(`${gisuLabel(k)}- ${c[k]}회`));
       out.push(`총 ${reg.length}회 -> ${classMoney(reg.length)}`, "");
       total += reg.length * HOURS_PER_CLASS * (rc || 0);
     }
     if (ext.length) {
       const c = {};
       ext.forEach((l) => {
-        const k = `${gisu(l.title)}기 ${kindOf(l)}`;
+        const k = `${gisuLabel(gisu(l.title))} ${kindOf(l)}`;
         c[k] = (c[k] || 0) + 1;
       });
       out.push(`*추가&직보수업(${rateLabel(rc)})`);
