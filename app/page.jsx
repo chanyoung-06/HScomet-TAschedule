@@ -136,8 +136,42 @@ function lastDayOfMonthKey(key) {
   const d = new Date(`${key}T00:00:00`);
   return dateKey(new Date(d.getFullYear(), d.getMonth() + 1, 0));
 }
+function eventTimed(e) {
+  return e.allDay === false && !!e.startTime;
+}
+function eventTimeText(e) {
+  if (!eventTimed(e)) return "";
+  return e.endTime ? `${e.startTime}–${e.endTime}` : e.startTime;
+}
 function eventRange(e) {
-  return e.start === e.end ? md(e.start) : `${md(e.start)}–${md(e.end)}`;
+  const d = e.start === e.end ? md(e.start) : `${md(e.start)}–${md(e.end)}`;
+  return eventTimed(e) ? `${d} ${eventTimeText(e)}` : d;
+}
+// 한 주(7칸, 빈칸은 null)에 걸친 일정을 줄(lane)로 나눔 → 연속 일정은 한 줄 막대
+function weekEventLanes(week, evs) {
+  const real = week.filter(Boolean);
+  if (!real.length) return { segs: [], lanes: 0 };
+  const lo = real[0];
+  const hi = real[real.length - 1];
+  const idx = (ds) => week.indexOf(ds);
+  const segs = evs
+    .filter((e) => e.start <= hi && e.end >= lo)
+    .map((e) => {
+      const a = e.start < lo ? lo : e.start;
+      const b = e.end > hi ? hi : e.end;
+      return { e, cs: idx(a), ce: idx(b), cl: e.start < a, cr: e.end > b };
+    })
+    .sort((x, y) => x.cs - y.cs || y.ce - y.cs - (x.ce - x.cs) || (x.e.startTime || "").localeCompare(y.e.startTime || ""));
+  const laneEnd = [];
+  segs.forEach((sg) => {
+    let lane = laneEnd.findIndex((end) => end < sg.cs);
+    if (lane === -1) {
+      lane = laneEnd.length;
+      laneEnd.push(sg.ce);
+    } else laneEnd[lane] = sg.ce;
+    sg.lane = lane;
+  });
+  return { segs, lanes: laneEnd.length };
 }
 function getMonthDates(year, month) {
   const first = new Date(year, month - 1, 1);
@@ -246,6 +280,8 @@ function TextInput({ value, onCommit, placeholder, className = "", type = "text"
       onChange={(e) => setLocal(e.target.value)}
       onBlur={() => onCommit(local)}
       onKeyDown={(e) => {
+        // 한글 조합 중 Enter는 무시 (마지막 글자 중복 입력 방지)
+        if (e.nativeEvent.isComposing || e.keyCode === 229) return;
         if (e.key === "Enter") e.currentTarget.blur();
       }}
       placeholder={placeholder}
@@ -276,6 +312,8 @@ function MoneyInput({ value, onCommit, placeholder }) {
       onChange={(e) => setLocal(withCommas(e.target.value))}
       onBlur={() => onCommit(local.replace(/,/g, ""))}
       onKeyDown={(e) => {
+        // 한글 조합 중 Enter는 무시 (마지막 글자 중복 입력 방지)
+        if (e.nativeEvent.isComposing || e.keyCode === 229) return;
         if (e.key === "Enter") e.currentTarget.blur();
       }}
       placeholder={placeholder}
@@ -386,7 +424,8 @@ export default function Page() {
     assistants: [NO_PERSON, NO_PERSON],
     type: "extra",
   });
-  const [evForm, setEvForm] = useState({ title: "", start: todayKey, end: todayKey, color: "slate" });
+  const [evForm, setEvForm] = useState({ title: "", start: todayKey, end: todayKey, color: "slate", allDay: true, startTime: "18:00", endTime: "19:00" });
+  const [evEditId, setEvEditId] = useState(null); // 수정 중인 일정 id
   const [undoStack, setUndoStack] = useState([]);
   const remoteUpdateRef = useRef(false);
   const toastTimer = useRef(null);
@@ -602,6 +641,16 @@ export default function Page() {
     return events.filter((e) => e.start <= last && e.end >= first).sort((a, b) => a.start.localeCompare(b.start));
   }, [events, monthPrefix, year, month]);
   const eventsOn = (ds) => monthEvents.filter((e) => e.start <= ds && e.end >= ds);
+  const monthWeeks = () => {
+    const first = new Date(year, month - 1, 1).getDay();
+    const count = new Date(year, month, 0).getDate();
+    const flat = [...Array(first).fill(null)];
+    for (let d = 1; d <= count; d++) flat.push(`${monthPrefix}${pad(d)}`);
+    while (flat.length % 7) flat.push(null);
+    const weeks = [];
+    for (let i = 0; i < flat.length; i += 7) weeks.push(flat.slice(i, i + 7));
+    return weeks;
+  };
   const pendingSwaps = useMemo(() => {
     const list = [];
     lessons.forEach((l) => (l.swapRequests || []).forEach((requester) => list.push({ lesson: l, requester })));
@@ -1131,15 +1180,40 @@ export default function Page() {
     if (!title) return window.alert("일정 이름을 입력해 주세요.");
     const start = evForm.start;
     const end = evForm.end && evForm.end >= start ? evForm.end : start;
-    pushUndo("일정 추가");
-    setEvents((prev) => [...prev, { id: `ev-${Date.now()}`, title, start, end, color: evForm.color }]);
+    const editing = evEditId && events.some((x) => x.id === evEditId);
+    pushUndo(editing ? "일정 수정" : "일정 추가");
+    const timed = !evForm.allDay && evForm.startTime;
+    const ev = { id: editing ? evEditId : `ev-${Date.now()}`, title, start, end, color: evForm.color, allDay: !timed };
+    if (timed) {
+      ev.startTime = evForm.startTime;
+      if (evForm.endTime) ev.endTime = evForm.endTime;
+    }
+    setEvents((prev) => (editing ? prev.map((x) => (x.id === evEditId ? ev : x)) : [...prev, ev]));
     setEvForm({ ...evForm, title: "" });
-    showToast("일정을 추가했어요");
+    setEvEditId(null);
+    showToast(editing ? "일정을 수정했어요" : "일정을 추가했어요");
+  };
+  const startEditEvent = (e) => {
+    setEvEditId(e.id);
+    setEvForm({
+      title: e.title,
+      start: e.start,
+      end: e.end,
+      color: e.color || "slate",
+      allDay: !eventTimed(e),
+      startTime: e.startTime || "18:00",
+      endTime: e.endTime || "19:00",
+    });
+  };
+  const cancelEditEvent = () => {
+    setEvEditId(null);
+    setEvForm({ ...evForm, title: "" });
   };
   const deleteEvent = (id) => {
     if (!window.confirm("이 일정을 삭제할까요?")) return;
     pushUndo("일정 삭제");
     setEvents((prev) => prev.filter((e) => e.id !== id));
+    if (evEditId === id) cancelEditEvent();
     showToast("일정을 삭제했어요");
   };
 
@@ -1788,40 +1862,61 @@ export default function Page() {
 
   // ── 관리자 화면 ──
   const smallCalendar = (list = adminLessons) => {
-    const first = new Date(year, month - 1, 1).getDay();
-    const count = new Date(year, month, 0).getDate();
-    const cells = [];
-    for (let i = 0; i < first; i++) cells.push(<div key={`b${i}`} className="hs-cc blank" />);
-    for (let d = 1; d <= count; d++) {
-      const ds = `${monthPrefix}${pad(d)}`;
-      const ls = list.filter((l) => l.date === ds);
-      const w = (first + d - 1) % 7;
-      const req = !isAcademy && ls.some((l) => (l.swapRequests || []).length);
-      cells.push(
-        <button
-          type="button"
-          key={ds}
-          className={`hs-cc w${w} ${ds === selDay ? "sel" : ""} ${ds === todayKey ? "today" : ""}`}
-          onClick={() => setSelDay(ds)}
-          aria-label={`${month}월 ${d}일 수업 ${ls.length}개`}
-        >
-          <span className="n">{d}</span>
-          {eventsOn(ds).map((e) => (
-            <i key={e.id} className={`evbar ev-${e.color} ${e.start === ds || d === 1 ? "s" : ""} ${e.end === ds ? "e" : ""}`}>
-              {e.start === ds || w === 0 || d === 1 ? e.title : "\u00a0"}
-            </i>
-          ))}
-          {ls.slice(0, 3).map((l) => (
-            <i key={l.id} className={`mini ${lessonTone(l)}`}>
-              {gisu(l.title)}
-              {kindOf(l) ? kindOf(l)[0] : ""}
-            </i>
-          ))}
-          {ls.length > 3 && <i className="more">+{ls.length - 3}</i>}
-          {req && <em className="hs-dot" />}
-        </button>
+    const weekEls = monthWeeks().map((week, wi) => {
+      const { segs, lanes } = weekEventLanes(week, monthEvents);
+      const rows = lanes + 2;
+      const items = [];
+      week.forEach((ds, c) => {
+        if (!ds) {
+          items.push(<div key={`b${c}`} className="hs-cc blank" style={{ gridColumn: c + 1, gridRow: `1 / span ${rows}` }} />);
+          return;
+        }
+        const d = Number(ds.slice(8));
+        const ls = list.filter((l) => l.date === ds);
+        const req = !isAcademy && ls.some((l) => (l.swapRequests || []).length);
+        items.push(
+          <button
+            type="button"
+            key={ds}
+            className={`hs-cc w${c} ${ds === selDay ? "sel" : ""} ${ds === todayKey ? "today" : ""}`}
+            style={{ gridColumn: c + 1, gridRow: `1 / span ${rows}` }}
+            onClick={() => setSelDay(ds)}
+            aria-label={`${month}월 ${d}일 수업 ${ls.length}개`}
+          >
+            {req && <em className="hs-dot" />}
+          </button>,
+          <span key={`n${ds}`} className={`hs-ccn w${c} ${ds === todayKey ? "today" : ""}`} style={{ gridColumn: c + 1, gridRow: 1 }}>
+            <span className="n">{d}</span>
+          </span>,
+          <span key={`l${ds}`} className="hs-ccl" style={{ gridColumn: c + 1, gridRow: rows }}>
+            {ls.slice(0, 3).map((l) => (
+              <i key={l.id} className={`mini ${lessonTone(l)}`}>
+                {gisu(l.title)}
+                {kindOf(l) ? kindOf(l)[0] : ""}
+              </i>
+            ))}
+            {ls.length > 3 && <i className="more">+{ls.length - 3}</i>}
+          </span>
+        );
+      });
+      segs.forEach((sg) => {
+        const dot = eventTimed(sg.e) && sg.cs === sg.ce && !sg.cl && !sg.cr;
+        items.push(
+          <i
+            key={`e${sg.e.id}`}
+            className={`evbar ev-${sg.e.color} ${sg.cl ? "cl" : ""} ${sg.cr ? "cr" : ""} ${dot ? "dot" : ""}`}
+            style={{ gridColumn: `${sg.cs + 1} / ${sg.ce + 2}`, gridRow: sg.lane + 2 }}
+          >
+            {sg.e.title}
+          </i>
+        );
+      });
+      return (
+        <div key={wi} className="hs-cweek">
+          {items}
+        </div>
       );
-    }
+    });
     return (
       <div className="hs-smallcal">
         <div className="hs-panel hs-calp">
@@ -1832,7 +1927,7 @@ export default function Page() {
               </span>
             ))}
           </div>
-          <div className="hs-cal">{cells}</div>
+          <div className="hs-cal">{weekEls}</div>
         </div>
         <div className="hs-calnote">
           <span>숫자 = 기수</span>
@@ -2121,8 +2216,7 @@ export default function Page() {
   };
 
   const addEventForm = () => {
-    const upcoming = events.filter((e) => e.end >= todayKey).sort((x, y) => x.start.localeCompare(y.start));
-    const pastCount = events.length - upcoming.length;
+    const editing = evEditId && events.some((x) => x.id === evEditId);
     return (
       <div className="hs-form">
         <TextInput value={evForm.title} onCommit={(v) => setEvForm({ ...evForm, title: v })} placeholder="일정 이름" />
@@ -2143,6 +2237,24 @@ export default function Page() {
             <input type="date" value={evForm.end} min={evForm.start} onChange={(e) => setEvForm({ ...evForm, end: e.target.value })} />
           </label>
         </div>
+        <label className="hs-check">
+          <input type="checkbox" checked={evForm.allDay} onChange={(e) => setEvForm({ ...evForm, allDay: e.target.checked })} /> 종일
+        </label>
+        {!evForm.allDay && (
+          <div className="hs-when-t">
+            <input
+              type="time"
+              value={evForm.startTime}
+              aria-label="시작 시간"
+              onChange={(e) => {
+                const v = e.target.value;
+                setEvForm({ ...evForm, startTime: v, endTime: addHoursToTime(v, 1) || evForm.endTime });
+              }}
+            />
+            <span>–</span>
+            <input type="time" value={evForm.endTime} aria-label="종료 시간" onChange={(e) => setEvForm({ ...evForm, endTime: e.target.value })} />
+          </div>
+        )}
         <div className="hs-swatches" role="group" aria-label="색">
           {EVENT_COLORS.map((c) => (
             <button
@@ -2155,24 +2267,53 @@ export default function Page() {
             />
           ))}
         </div>
-        <button type="button" className="hs-btn primary" onClick={addEvent}>
-          일정 추가
-        </button>
-        {upcoming.length > 0 && (
+        {editing ? (
+          <div className="hs-grid2">
+            <button type="button" className="hs-btn" onClick={cancelEditEvent}>
+              취소
+            </button>
+            <button type="button" className="hs-btn primary" onClick={addEvent}>
+              수정 저장
+            </button>
+          </div>
+        ) : (
+          <button type="button" className="hs-btn primary" onClick={addEvent}>
+            일정 추가
+          </button>
+        )}
+        <div className="hs-evhead">{month}월 일정 {monthEvents.length}개</div>
+        {monthEvents.length > 0 ? (
           <div className="hs-evlist">
-            {upcoming.map((e) => (
-              <div key={e.id} className={`hs-evrow ev-${e.color}`}>
+            {monthEvents.map((e) => (
+              <div
+                key={e.id}
+                role="button"
+                tabIndex={0}
+                className={`hs-evrow ev-${e.color} ${evEditId === e.id ? "on" : ""} ${e.end < todayKey ? "past" : ""}`}
+                onClick={() => startEditEvent(e)}
+                onKeyDown={(k) => {
+                  if (k.key === "Enter") startEditEvent(e);
+                }}
+              >
                 <i />
                 <b>{e.title}</b>
                 <span>{eventRange(e)}</span>
-                <button type="button" onClick={() => deleteEvent(e.id)} aria-label="삭제">
+                <button
+                  type="button"
+                  onClick={(k) => {
+                    k.stopPropagation();
+                    deleteEvent(e.id);
+                  }}
+                  aria-label="삭제"
+                >
                   ×
                 </button>
               </div>
             ))}
           </div>
+        ) : (
+          <p className="hs-meta">이번 달 일정이 없어요</p>
         )}
-        {pastCount > 0 && <p className="hs-meta">지난 일정 {pastCount}개는 캘린더에서 볼 수 있어요</p>}
       </div>
     );
   };
@@ -2562,37 +2703,38 @@ export default function Page() {
             : adminLessons;
     const highlight = mode === "ta" ? currentAssistant : mode === "capture" && who !== "전체" ? who : "";
     const marks = mode === "ta" || mode === "admin"; // 출근 체크 표시는 조교·관리자 화면에서만
-    const first = new Date(year, month - 1, 1).getDay();
-    const count = new Date(year, month, 0).getDate();
-    const cells = [];
-    for (let i = 0; i < first; i++) cells.push(<div key={`b${i}`} className="hs-bc blank" />);
-    for (let d = 1; d <= count; d++) {
-      const ds = `${monthPrefix}${pad(d)}`;
-      const w = (first + d - 1) % 7;
-      const ls = src.filter((l) => l.date === ds);
-      const clickable = mode === "admin" || mode === "academy";
-      cells.push(
-        <div
-          key={ds}
-          className={`hs-bc w${w} ${mode !== "capture" && ds === todayKey ? "today" : ""} ${clickable && ds === selDay ? "sel" : ""} ${
-            mode !== "capture" && ds < todayKey ? "past" : ""
-          } ${clickable ? "click" : ""}`}
-          onClick={
-            clickable
-              ? () => {
-                  setSelDay(ds);
-                  if (mode === "admin") setAdminTab("sched");
-                  setSchedView("cal");
-                }
-              : undefined
-          }
-        >
-          <div className="bn">{d}</div>
-          {eventsOn(ds).map((e) => (
-            <div key={e.id} className={`hs-bev ev-${e.color}`}>
-              {e.title}
-            </div>
-          ))}
+    const clickable = mode === "admin" || mode === "academy";
+    const live = mode !== "capture";
+    const weekEls = monthWeeks().map((week, wi) => {
+      const { segs, lanes } = weekEventLanes(week, monthEvents);
+      const rows = lanes + 2;
+      const items = [];
+      week.forEach((ds, w) => {
+        if (!ds) {
+          items.push(<div key={`b${w}`} className={`hs-bc blank w${w}`} style={{ gridColumn: w + 1, gridRow: `1 / span ${rows}` }} />);
+          return;
+        }
+        const d = Number(ds.slice(8));
+        const ls = src.filter((l) => l.date === ds);
+        items.push(
+          <div
+            key={ds}
+            className={`hs-bc w${w} ${clickable && ds === selDay ? "sel" : ""} ${clickable ? "click" : ""}`}
+            style={{ gridColumn: w + 1, gridRow: `1 / span ${rows}` }}
+            onClick={
+              clickable
+                ? () => {
+                    setSelDay(ds);
+                    if (mode === "admin") setAdminTab("sched");
+                    setSchedView("cal");
+                  }
+                : undefined
+            }
+          />,
+          <div key={`n${ds}`} className={`hs-bnum w${w} ${live && ds === todayKey ? "today" : ""}`} style={{ gridColumn: w + 1, gridRow: 1 }}>
+            <span className="bn">{d}</span>
+          </div>,
+          <div key={`l${ds}`} className={`hs-blist ${live && ds < todayKey ? "past" : ""}`} style={{ gridColumn: w + 1, gridRow: rows }}>
           {ls.map((l) => (
             <div key={l.id} className={`hs-bl ${lessonTone(l)}`}>
               <div className="bt">
@@ -2624,9 +2766,29 @@ export default function Page() {
               </div>
             </div>
           ))}
+          </div>
+        );
+      });
+      segs.forEach((sg) => {
+        const dot = eventTimed(sg.e) && sg.cs === sg.ce && !sg.cl && !sg.cr;
+        items.push(
+          <div
+            key={`e${sg.e.id}`}
+            className={`hs-bev ev-${sg.e.color} ${sg.cl ? "cl" : ""} ${sg.cr ? "cr" : ""} ${dot ? "dot" : ""}`}
+            style={{ gridColumn: `${sg.cs + 1} / ${sg.ce + 2}`, gridRow: sg.lane + 2 }}
+            title={`${sg.e.title} · ${eventRange(sg.e)}`}
+          >
+            {eventTimed(sg.e) && <span className="et">{sg.e.startTime}</span>}
+            {sg.e.title}
+          </div>
+        );
+      });
+      return (
+        <div key={wi} className="hs-bweek">
+          {items}
         </div>
       );
-    }
+    });
     const label =
       mode === "academy"
         ? "전체 출근 일정"
@@ -2658,7 +2820,7 @@ export default function Page() {
               </span>
             ))}
           </div>
-          <div className="hs-bcells">{cells}</div>
+          <div className="hs-bcells">{weekEls}</div>
         </div>
       </div>
     );
@@ -2999,25 +3161,37 @@ const CSS = `
 .hs-smallcal .hs-calp{padding:10px 8px}
 .hs-cal-h{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));text-align:center;font-size:11px;font-weight:700;color:var(--sub);margin-bottom:6px}
 .hs-cal-h .w0{color:var(--sun)} .hs-cal-h .w6{color:var(--sat)}
-.hs-cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px}
-.hs-cc{position:relative;min-height:72px;border:1px solid var(--line)!important;background:var(--surface)!important;border-radius:8px;padding:4px 2px;display:flex;flex-direction:column;align-items:center;gap:2px}
+.hs-cal{display:flex;flex-direction:column;gap:3px}
+.hs-cweek{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));column-gap:3px;align-content:start}
+.hs-cweek > *{min-width:0}
+.hs-cc{position:relative;min-height:72px;border:1px solid var(--line)!important;background:var(--surface)!important;border-radius:8px;padding:0}
+.hs-ccn,.hs-ccl,.hs-cweek .evbar{pointer-events:none;position:relative;z-index:1}
+.hs-ccn{display:flex;justify-content:center;padding-top:4px}
+.hs-ccl{display:flex;flex-direction:column;align-items:center;gap:2px;padding:2px 2px 4px}
 .hs-cc.blank{border:0!important;background:none!important}
-.hs-cc .n{font-size:12px;font-weight:700;font-family:var(--mono);line-height:16px}
-.hs-cc.w0 .n{color:var(--sun)} .hs-cc.w6 .n{color:var(--sat)}
-.hs-cc.today .n{background:var(--accent);color:var(--accent-ink);border-radius:999px;padding:0 5px}
+.hs-ccn .n{font-size:12px;font-weight:700;font-family:var(--mono);line-height:16px}
+.hs-ccn.w0 .n{color:var(--sun)} .hs-ccn.w6 .n{color:var(--sat)}
+.hs-ccn.today .n{background:var(--accent);color:var(--accent-ink);border-radius:999px;padding:0 5px}
 .hs-cc.sel{border-color:var(--accent)!important;box-shadow:inset 0 0 0 1px var(--accent)}
-.hs-cc .mini{font-style:normal;font-size:10px;font-weight:700;width:100%;max-width:40px;border-radius:4px;background:var(--cb);color:var(--c);border:1px solid var(--c);line-height:14px;text-align:center;white-space:nowrap;overflow:hidden}
-.hs-cc .more{font-style:normal;font-size:10px;color:var(--faint)}
+.hs-ccl .mini{font-style:normal;font-size:10px;font-weight:700;width:100%;max-width:40px;border-radius:4px;background:var(--cb);color:var(--c);border:1px solid var(--c);line-height:14px;text-align:center;white-space:nowrap;overflow:hidden}
+.hs-ccl .more{font-style:normal;font-size:10px;color:var(--faint)}
 .hs-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--swap);flex-shrink:0}
 .hs-cc .hs-dot{position:absolute;top:4px;right:4px}
 .ev-slate{--ec:#64748b;--eb:#eef1f5} .ev-teal{--ec:#0f9488;--eb:#e2f6f3} .ev-orange{--ec:#ea6a0c;--eb:#fff0e3}
 .ev-pink{--ec:#db2777;--eb:#fde9f2} .ev-brown{--ec:#8a5a2b;--eb:#f5ece2}
 @media (prefers-color-scheme: dark){ .ev-slate{--ec:#a3b1c4;--eb:#232a35} .ev-teal{--ec:#2dd4bf;--eb:#12302c}
  .ev-orange{--ec:#fb923c;--eb:#33210f} .ev-pink{--ec:#f472b6;--eb:#33172a} .ev-brown{--ec:#d2a679;--eb:#2e2318} }
-.hs-cc .evbar{font-style:normal;font-size:9.5px;font-weight:700;line-height:13px;align-self:stretch;margin:0 -3px;padding:0 3px;background:var(--ec);color:#fff;white-space:nowrap;overflow:hidden;text-overflow:clip}
-.hs-cc .evbar.s{margin-left:0;border-top-left-radius:4px;border-bottom-left-radius:4px}
-.hs-cc .evbar.e{margin-right:0;border-top-right-radius:4px;border-bottom-right-radius:4px}
-.hs-bev{background:var(--ec);color:#fff;font-size:11.5px;font-weight:700;border-radius:5px;padding:2px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hs-cweek .evbar{font-style:normal;font-size:9.5px;font-weight:700;line-height:13px;margin:1px 2px 0;padding:0 3px;border-radius:4px;background:var(--ec);color:#fff;white-space:nowrap;overflow:hidden;text-overflow:clip}
+.hs-cweek .evbar.cl{margin-left:0;border-top-left-radius:0;border-bottom-left-radius:0}
+.hs-cweek .evbar.cr{margin-right:0;border-top-right-radius:0;border-bottom-right-radius:0}
+.hs-cweek .evbar.dot{background:var(--eb);color:var(--ec)}
+.hs-bev{background:var(--ec);color:#fff;font-size:11.5px;font-weight:700;border-radius:5px;padding:2px 6px;margin:2px 4px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hs-bev.cl{margin-left:0;border-top-left-radius:0;border-bottom-left-radius:0}
+.hs-bev.cr{margin-right:0;border-top-right-radius:0;border-bottom-right-radius:0}
+.hs-bev .et{font-family:var(--mono);font-weight:600;margin-right:5px;opacity:.9}
+.hs-bev.dot{background:none;color:var(--ink);font-weight:600;padding-left:4px;white-space:normal;overflow-wrap:anywhere}
+.hs-bev.dot::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ec);margin-right:5px;vertical-align:1px}
+.hs-bev.dot .et{color:var(--sub)}
 .hs-evchips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
 .hs-evchip{display:inline-flex;align-items:center;gap:6px;background:var(--eb);color:var(--ec);border:1px solid var(--ec);border-radius:999px;padding:3px 10px;font-size:12.5px}
 .hs-evchip span{font-family:var(--mono);font-size:11.5px;opacity:.85}
@@ -3032,6 +3206,10 @@ const CSS = `
 .hs-evrow i{width:8px;height:8px;border-radius:50%;background:var(--ec);flex-shrink:0}
 .hs-evrow b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hs-evrow span{font-family:var(--mono);font-size:12px;color:var(--sub)}
+.hs-evrow{cursor:pointer;border:2px solid transparent}
+.hs-evrow.on{border-color:var(--ec)}
+.hs-evrow.past{opacity:.6}
+.hs-evhead{font-size:12.5px;font-weight:700;color:var(--sub);margin-top:6px}
 .hs-evrow button{border:0;background:none;color:var(--sub);font-size:18px;line-height:1;padding:0 4px;cursor:pointer}
 .hs-calnote{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--sub);margin-top:8px;padding-left:4px}
 .hs-calnote .hs-dot{margin-right:4px;vertical-align:1px}
@@ -3084,16 +3262,21 @@ const CSS = `
 .hs-bgrid{background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden}
 .hs-bwk{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border-bottom:1px solid var(--line);font-size:12px;font-weight:700;color:var(--sub);text-align:center;padding:8px 0}
 .hs-bwk .w0{color:var(--sun)} .hs-bwk .w6{color:var(--sat)}
-.hs-bcells{display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}
-.hs-bc{min-height:128px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:6px;display:flex;flex-direction:column;gap:4px;min-width:0}
-.hs-bc:nth-child(7n){border-right:0}
+.hs-bcells{display:flex;flex-direction:column}
+.hs-bweek{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));grid-auto-rows:auto;align-content:start}
+.hs-bweek > *{min-width:0}
+.hs-bc{min-height:128px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+.hs-bc.w6{border-right:0}
+.hs-bnum,.hs-blist,.hs-bev{pointer-events:none;position:relative;z-index:1}
+.hs-bnum{padding:6px 6px 3px;display:flex}
+.hs-bnum.w0 .bn{color:var(--sun)} .hs-bnum.w6 .bn{color:var(--sat)}
+.hs-bnum.today .bn{background:var(--accent);color:var(--accent-ink);border-radius:999px;padding:0 7px}
+.hs-blist{display:flex;flex-direction:column;gap:4px;padding:3px 6px 6px}
+.hs-blist.past .hs-bl{opacity:.6}
 .hs-bc.click{cursor:pointer}
 .hs-bc.click:hover{background:var(--bg)}
 .hs-bc.sel{box-shadow:inset 0 0 0 2px var(--accent)}
-.hs-bc.past .hs-bl{opacity:.6}
-.hs-bc .bn{font-size:13px;font-weight:700;font-family:var(--mono)}
-.hs-bc.w0 .bn{color:var(--sun)} .hs-bc.w6 .bn{color:var(--sat)}
-.hs-bc.today .bn{align-self:flex-start;background:var(--accent);color:var(--accent-ink);border-radius:999px;padding:0 7px}
+.hs-bnum .bn{font-size:13px;font-weight:700;font-family:var(--mono)}
 .hs-bl{background:var(--cb);border-left:3px solid var(--c);border-radius:6px;padding:4px 6px;font-size:11.5px;line-height:1.35;min-width:0}
 .hs-bl .bt{display:flex;align-items:center;flex-wrap:wrap;gap:0 4px}
 .hs-bl .bt b{font-size:12px;flex:1 1 auto;min-width:0;overflow-wrap:anywhere;word-break:keep-all}
@@ -3171,8 +3354,10 @@ const CSS = `
   .hs-bighead h2{font-size:30px}
   .hs-bighead .hs-meta{font-size:15px}
   .hs-bwk{font-size:15px;padding:10px 0}
-  .hs-bc{min-height:150px;padding:8px;gap:5px}
-  .hs-bc .bn{font-size:16px}
+  .hs-bc{min-height:150px}
+  .hs-bnum{padding:8px 8px 4px}
+  .hs-blist{padding:4px 8px 8px;gap:5px}
+  .hs-bnum .bn{font-size:16px}
   .hs-bev{font-size:13.5px;padding:3px 8px}
   .hs-evchip{font-size:14px}
   .hs-evrow{font-size:15px}
