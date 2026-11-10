@@ -1912,7 +1912,7 @@ export default function Page() {
         );
       });
       return (
-        <div key={wi} className="hs-cweek">
+        <div key={wi} className="hs-cweek" style={{ gridTemplateRows: `auto ${"auto ".repeat(lanes)}1fr` }}>
           {items}
         </div>
       );
@@ -2774,7 +2774,7 @@ export default function Page() {
         items.push(
           <div
             key={`e${sg.e.id}`}
-            className={`hs-bev ev-${sg.e.color} ${sg.cl ? "cl" : ""} ${sg.cr ? "cr" : ""} ${dot ? "dot" : ""}`}
+            className={`hs-bev ev-${sg.e.color} ${sg.cl ? "cl" : ""} ${sg.cr ? "cr" : ""} ${dot ? "dot" : ""} ${sg.cs === sg.ce ? "one" : ""}`}
             style={{ gridColumn: `${sg.cs + 1} / ${sg.ce + 2}`, gridRow: sg.lane + 2 }}
             title={`${sg.e.title} · ${eventRange(sg.e)}`}
           >
@@ -2784,7 +2784,7 @@ export default function Page() {
         );
       });
       return (
-        <div key={wi} className="hs-bweek">
+        <div key={wi} className="hs-bweek" style={{ gridTemplateRows: `auto ${"auto ".repeat(lanes)}1fr` }}>
           {items}
         </div>
       );
@@ -3181,11 +3181,12 @@ const CSS = `
 .ev-pink{--ec:#db2777;--eb:#fde9f2} .ev-brown{--ec:#8a5a2b;--eb:#f5ece2}
 @media (prefers-color-scheme: dark){ .ev-slate{--ec:#a3b1c4;--eb:#232a35} .ev-teal{--ec:#2dd4bf;--eb:#12302c}
  .ev-orange{--ec:#fb923c;--eb:#33210f} .ev-pink{--ec:#f472b6;--eb:#33172a} .ev-brown{--ec:#d2a679;--eb:#2e2318} }
-.hs-cweek .evbar{font-style:normal;font-size:9.5px;font-weight:700;line-height:13px;margin:1px 2px 0;padding:0 3px;border-radius:4px;background:var(--ec);color:#fff;white-space:nowrap;overflow:hidden;text-overflow:clip}
+.hs-cweek .evbar{align-self:start;font-style:normal;font-size:9.5px;font-weight:700;line-height:13px;margin:1px 2px 0;padding:0 3px;border-radius:4px;background:var(--ec);color:#fff;white-space:nowrap;overflow:hidden;text-overflow:clip}
 .hs-cweek .evbar.cl{margin-left:0;border-top-left-radius:0;border-bottom-left-radius:0}
 .hs-cweek .evbar.cr{margin-right:0;border-top-right-radius:0;border-bottom-right-radius:0}
 .hs-cweek .evbar.dot{background:var(--eb);color:var(--ec)}
-.hs-bev{background:var(--ec);color:#fff;font-size:11.5px;font-weight:700;border-radius:5px;padding:2px 6px;margin:2px 4px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hs-bev{align-self:start;line-height:1.35;background:var(--ec);color:#fff;font-size:11.5px;font-weight:700;border-radius:5px;padding:1px 6px;margin:2px 4px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hs-bev.one{white-space:normal;overflow-wrap:anywhere}
 .hs-bev.cl{margin-left:0;border-top-left-radius:0;border-bottom-left-radius:0}
 .hs-bev.cr{margin-right:0;border-top-right-radius:0;border-bottom-right-radius:0}
 .hs-bev .et{font-family:var(--mono);font-weight:600;margin-right:5px;opacity:.9}
@@ -3358,7 +3359,7 @@ const CSS = `
   .hs-bnum{padding:8px 8px 4px}
   .hs-blist{padding:4px 8px 8px;gap:5px}
   .hs-bnum .bn{font-size:16px}
-  .hs-bev{font-size:13.5px;padding:3px 8px}
+  .hs-bev{font-size:13px;padding:1px 8px}
   .hs-evchip{font-size:14px}
   .hs-evrow{font-size:15px}
   .hs-bl{font-size:13.5px;padding:5px 8px}
