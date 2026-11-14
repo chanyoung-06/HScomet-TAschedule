@@ -1095,7 +1095,22 @@ export default function Page() {
   const clearLessonSwap = (id) => {
     pushUndo("대타 기록 초기화");
     setLessons((prev) =>
-      prev.map((l) => (l.id === id ? { ...l, swap: false, swapRequests: [], swapHistory: [], substituteAssistants: [] } : l))
+      prev.map((l) => {
+        if (l.id !== id) return l;
+        // 대타 내역을 거꾸로 되짚어 원래 조교로 복구 (A→B, B→C 같은 연쇄도 처리)
+        const assistants = [...l.assistants];
+        [...(l.swapHistory || [])].reverse().forEach((h) => {
+          if (!h.from || !h.to) return;
+          const i = assistants.indexOf(h.to);
+          if (i >= 0) assistants[i] = h.from;
+        });
+        // 빠진 대타 조교의 출근 체크는 정리
+        let attendance = l.attendance;
+        if (attendance) {
+          attendance = Object.fromEntries(Object.entries(attendance).filter(([n]) => assistants.includes(n)));
+        }
+        return { ...l, assistants, attendance, swap: false, swapRequests: [], swapHistory: [], substituteAssistants: [] };
+      })
     );
   };
   // 대타 내역의 대체자(to)를 다른 조교로 변경. 배정도 함께 업데이트.
@@ -2813,8 +2828,7 @@ export default function Page() {
             {year}년 {month}월
           </h2>
           <span className="hs-meta">
-            {mode === "capture" ? "혜성 코멧 학원 · " : ""}
-            {label} · {src.length}개
+            {mode === "capture" ? `혜성 코멧 학원 - 물리${who === "전체" ? "" : ` · ${who}`}` : `${label} · ${src.length}개`}
           </span>
         </div>
         <div className="hs-bgrid">
@@ -2873,7 +2887,7 @@ export default function Page() {
               <div className="hs-titlebox">
                 <img className="hs-logo" src={LOGO_SRC} alt="혜성 코멧 학원 로고" width={40} height={40} />
                 <div>
-                <div className="hs-brand">혜성 코멧 학원{isAdminRole ? " · 관리자" : ""}</div>
+                <div className="hs-brand">혜성 코멧 학원 - 물리{isAdminRole ? " · 관리자" : ""}</div>
                 <h1>{isAcademy ? titles.academy : authed ? titles[curTab] : "로그인"}</h1>
                 </div>
               </div>
