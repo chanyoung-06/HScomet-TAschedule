@@ -6,6 +6,8 @@ import { createClient } from "@supabase/supabase-js";
 const STORAGE_KEY = "hscomet-ta-schedule-v2";
 const LOGIN_TA_KEY = "hscomet-login-ta"; // 이 기기에서 로그인 유지 (조교)
 const LOGIN_ADMIN_KEY = "hscomet-login-admin"; // 이 기기에서 로그인 유지 (관리자)
+const LOGIN_ACADEMY_KEY = "hscomet-login-academy"; // 이 기기에서 로그인 유지 (학원)
+const ACADEMY_PASSWORD = "hscomet101"; // 학원 화면 비밀번호 (이름 없이 비밀번호만 입력)
 const ADMIN_PASSWORD = "hscomet102"; // 처음 기본값 (관리 → 관리자 비밀번호에서 변경 가능, DB에 저장)
 const SUPABASE_STATE_ID = "main";
 const SUPABASE_URL_FALLBACK = "https://msdikmalqkhmkwqzbpkm.supabase.co";
@@ -392,6 +394,7 @@ export default function Page() {
   const [currentAssistant, setCurrentAssistant] = useState("");
   const [assistantUnlocked, setAssistantUnlocked] = useState(false);
   const [adminUnlocked, setAdminUnlocked] = useState(false);
+  const [academyUnlocked, setAcademyUnlocked] = useState(false);
   const [loginName, setLoginName] = useState("");
   const [loginPw, setLoginPw] = useState("");
   const [loginKeep, setLoginKeep] = useState(true);
@@ -585,6 +588,8 @@ export default function Page() {
       setAdminUnlocked(true);
       setAdminSessionPw(ad.pw);
     }
+    const ac = readLocal(LOGIN_ACADEMY_KEY);
+    if (ac && ac.pw === ACADEMY_PASSWORD) setAcademyUnlocked(true);
     // 로그인해 둔 기기는 그 화면부터, 아니면 학원(보기 전용) 화면
     if (taOk) setRole("assistant");
     else if (adOk) setRole("admin");
@@ -624,7 +629,8 @@ export default function Page() {
 
   const isAdminRole = role === "admin";
   const isAcademy = role === "academy";
-  const authed = isAcademy ? true : isAdminRole ? adminUnlocked : assistantUnlocked;
+  const academyAuthed = academyUnlocked || adminUnlocked; // 관리자 로그인 중이면 학원 화면도 바로 입장
+  const authed = isAcademy ? academyAuthed : isAdminRole ? adminUnlocked : assistantUnlocked;
   const monthPrefix = `${year}-${pad(month)}-`;
   const monthKey = `${year}-${pad(month)}`;
 
@@ -857,7 +863,11 @@ export default function Page() {
 
   // ── 로그인 ──
   const doLogin = () => {
-    if (isAdminRole) {
+    if (isAcademy) {
+      if (loginPw !== ACADEMY_PASSWORD) return setLoginErr("비밀번호가 맞지 않아요.");
+      setAcademyUnlocked(true);
+      if (loginKeep) writeLocal(LOGIN_ACADEMY_KEY, { pw: loginPw });
+    } else if (isAdminRole) {
       if (loginPw !== adminPassword) return setLoginErr("비밀번호가 맞지 않아요.");
       setAdminUnlocked(true);
       setAdminSessionPw(loginPw);
@@ -877,7 +887,10 @@ export default function Page() {
     showToast("로그인했어요");
   };
   const logout = () => {
-    if (isAdminRole) {
+    if (isAcademy) {
+      setAcademyUnlocked(false);
+      writeLocal(LOGIN_ACADEMY_KEY, null);
+    } else if (isAdminRole) {
       setAdminUnlocked(false);
       writeLocal(LOGIN_ADMIN_KEY, null);
       if (viaAdmin) {
@@ -1652,8 +1665,8 @@ export default function Page() {
 
   const loginView = () => (
     <div className="hs-panel hs-login">
-      <h2>{isAdminRole ? "관리자 로그인" : "조교 로그인"}</h2>
-      {!isAdminRole && (
+      <h2>{isAcademy ? "학원 로그인" : isAdminRole ? "관리자 로그인" : "조교 로그인"}</h2>
+      {!isAdminRole && !isAcademy && (
         <select value={effectiveLoginName} onChange={(e) => setLoginName(e.target.value)} aria-label="이름">
           {loginOptions.map((n) => (
             <option key={n}>{n}</option>
@@ -2864,8 +2877,8 @@ export default function Page() {
 
   const mainContent = () => {
     if (!storageReady) return <div className="hs-panel hs-empty">불러오는 중...</div>;
-    if (isAcademy) return academyView();
     if (!authed) return loginView();
+    if (isAcademy) return academyView();
     if (isAdminRole) {
       if (adminTab === "req") return adminReq();
       if (adminTab === "stat") return adminStat();
@@ -2888,7 +2901,7 @@ export default function Page() {
                 <img className="hs-logo" src={LOGO_SRC} alt="혜성 코멧 학원 로고" width={40} height={40} />
                 <div>
                 <div className="hs-brand">혜성 코멧 학원 - 물리{isAdminRole ? " · 관리자" : ""}</div>
-                <h1>{isAcademy ? titles.academy : authed ? titles[curTab] : "로그인"}</h1>
+                <h1>{authed ? (isAcademy ? titles.academy : titles[curTab]) : "로그인"}</h1>
                 </div>
               </div>
               <div className="hs-role" role="group" aria-label="화면 전환">
@@ -2940,6 +2953,13 @@ export default function Page() {
                   ›
                 </button>
               </div>
+              {isAcademy && academyUnlocked && !adminUnlocked && (
+                <div className="hs-who">
+                  <button type="button" onClick={logout}>
+                    로그아웃
+                  </button>
+                </div>
+              )}
               {authed && !isAcademy && (
                 <div className="hs-who">
                   {!isAdminRole &&
