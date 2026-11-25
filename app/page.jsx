@@ -7,7 +7,7 @@ const STORAGE_KEY = "hscomet-ta-schedule-v2";
 const LOGIN_TA_KEY = "hscomet-login-ta"; // 이 기기에서 로그인 유지 (조교)
 const LOGIN_ADMIN_KEY = "hscomet-login-admin"; // 이 기기에서 로그인 유지 (관리자)
 const LOGIN_ACADEMY_KEY = "hscomet-login-academy"; // 이 기기에서 로그인 유지 (학원)
-const ACADEMY_PASSWORD = "hscomet101"; // 학원 화면 비밀번호 (이름 없이 비밀번호만 입력)
+const ACADEMY_PASSWORD = "hscomet101"; // 학원 화면 처음 비밀번호 (관리 → 학원 비밀번호에서 변경 가능, DB에 저장)
 const ADMIN_PASSWORD = "hscomet102"; // 처음 기본값 (관리 → 관리자 비밀번호에서 변경 가능, DB에 저장)
 const SUPABASE_STATE_ID = "main";
 const SUPABASE_URL_FALLBACK = "https://msdikmalqkhmkwqzbpkm.supabase.co";
@@ -380,6 +380,7 @@ export default function Page() {
   const [events, setEvents] = useState([]); // 수업 아닌 일정 [{id, title, start:"YYYY-MM-DD", end, color}]
   const [rates, setRates] = useState({}); // { 이름: { cls: "35000", etc: "30000" } }
   const [adminPassword, setAdminPassword] = useState(ADMIN_PASSWORD);
+  const [academyPassword, setAcademyPassword] = useState(ACADEMY_PASSWORD);
 
   // ── 이 기기 화면 상태 ──
   const [role, setRole] = useState("academy"); // academy(학원) | assistant(조교) | admin(관리자)
@@ -395,6 +396,9 @@ export default function Page() {
   const [assistantUnlocked, setAssistantUnlocked] = useState(false);
   const [adminUnlocked, setAdminUnlocked] = useState(false);
   const [academyUnlocked, setAcademyUnlocked] = useState(false);
+  const [academySessionPw, setAcademySessionPw] = useState(""); // 이 기기에서 학원 화면에 로그인할 때 쓴 비밀번호
+  const [acPwNew, setAcPwNew] = useState("");
+  const [acPwConfirm, setAcPwConfirm] = useState("");
   const [loginName, setLoginName] = useState("");
   const [loginPw, setLoginPw] = useState("");
   const [loginKeep, setLoginKeep] = useState(true);
@@ -415,6 +419,7 @@ export default function Page() {
   const [etcDesc, setEtcDesc] = useState("");
   const [etcVal, setEtcVal] = useState("");
   const [etcMode, setEtcMode] = useState("hours");
+  const [etcEditId, setEtcEditId] = useState(null);
   const [toast, setToast] = useState("");
   const [captureFor, setCaptureFor] = useState(null); // 이미지 저장 중인 대상 ("전체" 또는 조교 이름)
   const [exporting, setExporting] = useState(false);
@@ -456,6 +461,7 @@ export default function Page() {
     events,
     rates,
     adminPassword,
+    academyPassword,
   });
 
   const applySavedState = (data) => {
@@ -478,6 +484,7 @@ export default function Page() {
     setEvents(Array.isArray(data.events) ? data.events : []);
     if (data.rates) setRates(data.rates);
     if (data.adminPassword) setAdminPassword(data.adminPassword);
+    if (data.academyPassword) setAcademyPassword(data.academyPassword);
   };
 
   const pushUndo = (label) => {
@@ -570,7 +577,7 @@ export default function Page() {
     }, 400);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storageReady, assistants, assistantPasswords, inactiveAssistants, baseSchedule, enabledWeekdays, lessons, allowances, events, rates, adminPassword]);
+  }, [storageReady, assistants, assistantPasswords, inactiveAssistants, baseSchedule, enabledWeekdays, lessons, allowances, events, rates, adminPassword, academyPassword]);
 
   // ── 로그인 유지: 저장된 로그인 정보가 지금 비밀번호와 맞으면 자동 입장 ──
   useEffect(() => {
@@ -589,7 +596,10 @@ export default function Page() {
       setAdminSessionPw(ad.pw);
     }
     const ac = readLocal(LOGIN_ACADEMY_KEY);
-    if (ac && ac.pw === ACADEMY_PASSWORD) setAcademyUnlocked(true);
+    if (ac && ac.pw === academyPassword) {
+      setAcademyUnlocked(true);
+      setAcademySessionPw(ac.pw);
+    }
     // 로그인해 둔 기기는 그 화면부터, 아니면 학원(보기 전용) 화면
     if (taOk) setRole("assistant");
     else if (adOk) setRole("admin");
@@ -617,8 +627,14 @@ export default function Page() {
       }
       showToast("관리자 비밀번호가 바뀌었어요. 다시 로그인해 주세요");
     }
+    if (academyUnlocked && academyPassword !== academySessionPw) {
+      setAcademyUnlocked(false);
+      setAcademySessionPw("");
+      writeLocal(LOGIN_ACADEMY_KEY, null);
+      showToast("학원 비밀번호가 바뀌었어요. 다시 로그인해 주세요");
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storageReady, assistantPasswords, adminPassword, assistantUnlocked, adminUnlocked, currentAssistant, viaAdmin]);
+  }, [storageReady, assistantPasswords, adminPassword, academyPassword, assistantUnlocked, adminUnlocked, academyUnlocked, currentAssistant, viaAdmin]);
 
   const activeAssistants = useMemo(
     () => assistants.filter((n) => !inactiveAssistants.includes(n)),
@@ -742,20 +758,26 @@ export default function Page() {
       out.push(`총 ${ext.length}회 -> ${classMoney(ext.length)}`, "");
       total += ext.length * HOURS_PER_CLASS * (rc || 0);
     }
-    if (items.length) {
-      out.push(`*기타수당(${rateLabel(re)})`);
-      items.forEach((it) => {
+    // 기타수당: 수업 시급으로 계산하는 것과 기타 시급(·금액)으로 계산하는 것을 나눠 표기
+    const clsItems = items.filter((it) => it.amount == null && it.rate === "cls");
+    const etcItems = items.filter((it) => !clsItems.includes(it));
+    const pushItems = (list, rate, header) => {
+      if (!list.length) return;
+      out.push(header);
+      list.forEach((it) => {
         if (it.amount != null) {
           out.push(`${it.desc} -> ${won(it.amount)}원`);
           total += it.amount;
         } else {
-          out.push(`${it.desc}(${it.hours}H) -> ${re ? formatMan(it.hours * re) : "(시급 미설정)"}`);
-          total += it.hours * (re || 0);
-          if (!re) complete = false;
+          out.push(`${it.desc}(${it.hours}H) -> ${rate ? formatMan(it.hours * rate) : "(시급 미설정)"}`);
+          total += it.hours * (rate || 0);
+          if (!rate) complete = false;
         }
       });
       out.push("");
-    }
+    };
+    pushItems(clsItems, rc, `*수업 연장(${rateLabel(rc)})`);
+    pushItems(etcItems, re, `*기타수당(${rateLabel(re)})`);
     out.push("", `“총 금액: ${complete ? won(total) : "—"}원 ”`, "", "");
     const dl = (arr) => {
       const g = {};
@@ -815,17 +837,40 @@ export default function Page() {
     const desc = etcDesc.trim();
     const v = parseFloat(String(etcVal).replace(/[^0-9.]/g, ""));
     if (!desc) return showToast("내용을 입력해 주세요");
-    if (!(v > 0)) return showToast(etcMode === "hours" ? "시간을 입력해 주세요" : "금액을 입력해 주세요");
+    if (!(v > 0)) return showToast(etcMode === "amount" ? "금액을 입력해 주세요" : "시간을 입력해 주세요");
+    const old = etcEditId ? (allowances[currentAssistant] || []).find((a) => a.id === etcEditId) : null;
+    const base = { id: old ? old.id : `etc-${Date.now()}`, month: old ? old.month : monthKey, desc };
+    // hours: 기타 업무(기타 시급) / overtime: 수업 연장(수업 시급) / amount: 정해진 금액
     const item =
-      etcMode === "hours"
-        ? { id: `etc-${Date.now()}`, month: monthKey, desc, hours: v }
-        : { id: `etc-${Date.now()}`, month: monthKey, desc, amount: Math.round(v) };
-    setAllowances((prev) => ({ ...prev, [currentAssistant]: [...(prev[currentAssistant] || []), item] }));
+      etcMode === "amount" ? { ...base, amount: Math.round(v) } : { ...base, hours: v, rate: etcMode === "overtime" ? "cls" : "etc" };
+    setAllowances((prev) => {
+      const list = prev[currentAssistant] || [];
+      return { ...prev, [currentAssistant]: old ? list.map((a) => (a.id === old.id ? item : a)) : [...list, item] };
+    });
     setEtcDesc("");
     setEtcVal("");
-    showToast("기타수당을 추가했어요");
+    setEtcEditId(null);
+    showToast(old ? "기타수당을 수정했어요" : "기타수당을 추가했어요");
   };
+  const startEditAllowance = (it) => {
+    setEtcEditId(it.id);
+    setEtcDesc(it.desc);
+    if (it.amount != null) {
+      setEtcMode("amount");
+      setEtcVal(withCommas(String(it.amount)));
+    } else {
+      setEtcMode(it.rate === "cls" ? "overtime" : "hours");
+      setEtcVal(String(it.hours));
+    }
+  };
+  const cancelEditAllowance = () => {
+    setEtcEditId(null);
+    setEtcDesc("");
+    setEtcVal("");
+  };
+  const allowanceValue = (it) => (it.amount != null ? `${won(it.amount)}원` : `${it.hours}H · ${it.rate === "cls" ? "수업 연장" : "기타 업무"}`);
   const removeAllowance = (name, id) => {
+    if (etcEditId === id) cancelEditAllowance();
     setAllowances((prev) => ({ ...prev, [name]: (prev[name] || []).filter((a) => a.id !== id) }));
     showToast("삭제했어요");
   };
@@ -864,8 +909,9 @@ export default function Page() {
   // ── 로그인 ──
   const doLogin = () => {
     if (isAcademy) {
-      if (loginPw !== ACADEMY_PASSWORD) return setLoginErr("비밀번호가 맞지 않아요.");
+      if (loginPw !== academyPassword) return setLoginErr("비밀번호가 맞지 않아요.");
       setAcademyUnlocked(true);
+      setAcademySessionPw(loginPw);
       if (loginKeep) writeLocal(LOGIN_ACADEMY_KEY, { pw: loginPw });
     } else if (isAdminRole) {
       if (loginPw !== adminPassword) return setLoginErr("비밀번호가 맞지 않아요.");
@@ -889,6 +935,7 @@ export default function Page() {
   const logout = () => {
     if (isAcademy) {
       setAcademyUnlocked(false);
+      setAcademySessionPw("");
       writeLocal(LOGIN_ACADEMY_KEY, null);
     } else if (isAdminRole) {
       setAdminUnlocked(false);
@@ -954,6 +1001,17 @@ export default function Page() {
     setAdminPassword(a); // 이 기기를 포함해 관리자로 로그인된 모든 기기가 로그아웃됨
     setPwNew("");
     setPwConfirm("");
+  };
+
+  const changeAcademyPassword = () => {
+    const a = acPwNew.trim();
+    if (a.length < 4) return showToast("4자 이상으로 입력해 주세요");
+    if (a !== acPwConfirm.trim()) return showToast("두 칸의 비밀번호가 달라요");
+    pushUndo("학원 비밀번호 변경");
+    setAcademyPassword(a); // 학원 화면에 로그인된 모든 기기가 로그아웃됨
+    setAcPwNew("");
+    setAcPwConfirm("");
+    showToast("학원 비밀번호를 바꿨어요");
   };
 
   // ── 관리자: 일정 생성 / 저장 ──
@@ -1838,15 +1896,18 @@ export default function Page() {
         )}
 
         <div className="hs-panel">
-          <h3>기타수당 등록</h3>
-          <input type="text" value={etcDesc} onChange={(e) => setEtcDesc(e.target.value)} placeholder="예: 34기 김소영T 유도 프린트 해설 제작" />
-          <div className="hs-seg" role="group" aria-label="수당 종류">
-            <button type="button" className={etcMode === "hours" ? "on" : ""} onClick={() => setEtcMode("hours")}>
-              시간으로 (기타 시급)
-            </button>
-            <button type="button" className={etcMode === "amount" ? "on" : ""} onClick={() => setEtcMode("amount")}>
-              금액으로 (택시비 등)
-            </button>
+          <h3>{etcEditId ? "기타수당 수정" : "기타수당 등록"}</h3>
+          <input type="text" value={etcDesc} onChange={(e) => setEtcDesc(e.target.value)} placeholder="내용" />
+          <div className="hs-seg three" role="group" aria-label="수당 종류">
+            {[
+              ["hours", "기타 업무"],
+              ["overtime", "수업 연장"],
+              ["amount", "금액"],
+            ].map(([k, label]) => (
+              <button key={k} type="button" className={etcMode === k ? "on" : ""} onClick={() => setEtcMode(k)}>
+                {label}
+              </button>
+            ))}
           </div>
           <div className="hs-inline">
             <input
@@ -1857,23 +1918,33 @@ export default function Page() {
               onKeyDown={(e) => {
                 if (e.key === "Enter") addAllowance();
               }}
-              placeholder={etcMode === "hours" ? "시간 (예: 1.5)" : "금액 (예: 31,100)"}
+              placeholder={etcMode === "amount" ? "금액" : etcMode === "overtime" ? "수업 시간 외 추가로 한 시간" : "한 시간"}
             />
+            {etcEditId && (
+              <button type="button" className="hs-btn" onClick={cancelEditAllowance}>
+                취소
+              </button>
+            )}
             <button type="button" className="hs-btn primary" onClick={addAllowance}>
-              추가
+              {etcEditId ? "저장" : "추가"}
             </button>
           </div>
           {myAllowances.length ? (
             <div className="hs-etclist">
               {myAllowances.map((it) => (
-                <div key={it.id} className="hs-etcitem">
+                <div key={it.id} className={`hs-etcitem ${etcEditId === it.id ? "editing" : ""}`}>
                   <div>
                     {it.desc}
-                    <div className="v">{it.amount != null ? `${won(it.amount)}원` : `${it.hours}H`}</div>
+                    <div className="v">{allowanceValue(it)}</div>
                   </div>
-                  <button type="button" onClick={() => removeAllowance(currentAssistant, it.id)}>
-                    삭제
-                  </button>
+                  <div className="hs-etcbtns">
+                    <button type="button" className="edit" onClick={() => startEditAllowance(it)}>
+                      수정
+                    </button>
+                    <button type="button" onClick={() => removeAllowance(currentAssistant, it.id)}>
+                      삭제
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -2627,7 +2698,7 @@ export default function Page() {
                 <div key={it.id} className="hs-etcitem">
                   <div>
                     {it.desc}
-                    <div className="v">{it.amount != null ? `${won(it.amount)}원` : `${it.hours}H`}</div>
+                    <div className="v">{allowanceValue(it)}</div>
                   </div>
                   <button type="button" onClick={() => removeAllowance(n, it.id)}>
                     삭제
@@ -2681,6 +2752,27 @@ export default function Page() {
             autoComplete="new-password"
           />
           <button type="button" className="hs-btn primary" onClick={changeAdminPassword}>
+            비밀번호 변경
+          </button>
+        </div>
+      )}
+      {section(
+        "acpw",
+        "학원 비밀번호",
+        <div className="hs-form">
+          <p className="hs-meta">현재 비밀번호: {academyPassword}</p>
+          <input type="text" value={acPwNew} onChange={(e) => setAcPwNew(e.target.value)} placeholder="새 비밀번호" autoComplete="off" />
+          <input
+            type="text"
+            value={acPwConfirm}
+            onChange={(e) => setAcPwConfirm(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") changeAcademyPassword();
+            }}
+            placeholder="새 비밀번호 확인"
+            autoComplete="off"
+          />
+          <button type="button" className="hs-btn primary" onClick={changeAcademyPassword}>
             비밀번호 변경
           </button>
         </div>
@@ -3172,6 +3264,9 @@ const CSS = `
 .hs-etclist{display:flex;flex-direction:column}
 .hs-etcitem{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:10px 0;border-bottom:1px solid var(--line);font-size:13px;line-height:1.5}
 .hs-etcitem:last-child{border-bottom:0}
+.hs-etcitem.editing{background:var(--accent-soft, #e9eeff);border-radius:8px;padding-left:8px;padding-right:8px}
+.hs-etcbtns{display:flex;gap:6px;flex-shrink:0}
+.hs-etcitem .hs-etcbtns .edit{color:var(--accent)}
 .hs-etcitem>div{min-width:0}
 .hs-etcitem .v{font-size:12px;color:var(--sub);font-family:var(--mono)}
 .hs-etcitem button{border:1px solid var(--line);color:var(--danger);font-size:12px;border-radius:8px;padding:4px 8px;flex-shrink:0}
